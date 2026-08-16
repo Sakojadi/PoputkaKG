@@ -1,41 +1,43 @@
 import asyncio
 import logging
 import sys
-import uvicorn
 
+import uvicorn
 from aiogram import Bot, Dispatcher
+
 from bot.config import config
-from bot.handlers import get_handlers_router
 from bot.database.db import init_db
+from bot.handlers import get_handlers_router
+from bot.middlewares import BanMiddleware
 from bot.services.scheduler import start_scheduler
 from bot.web.app import app as fastapi_app
-from bot.middlewares import BanMiddleware
+
 
 async def main():
     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
     logger = logging.getLogger("main")
-    
+
     # Initialize DB
     await init_db()
-    
+
     # Start Scheduler
     start_scheduler()
-    
+
     bot = Bot(token=config.bot_token)
-    
+
     # Explicitly remove Telegram command menu button
     try:
         await bot.delete_my_commands()
     except Exception as e:
-        logging.debug(f"Failed to delete commands: {e}")
-        
+        logger.debug(f"Failed to delete commands: {e}")
+
     dp = Dispatcher()
-    
+
     # Register global BanMiddleware
     ban_middleware = BanMiddleware()
     dp.message.outer_middleware(ban_middleware)
     dp.callback_query.outer_middleware(ban_middleware)
-    
+
     dp.include_router(get_handlers_router())
 
     # Configure Uvicorn Web Server
@@ -44,7 +46,7 @@ async def main():
         host="0.0.0.0",
         port=config.port,
         log_level="info",
-        access_log=True
+        access_log=True,
     )
     server = uvicorn.Server(uvi_config)
 
@@ -52,10 +54,8 @@ async def main():
     logger.info(f"Starting Bot & Web Admin Panel on 0.0.0.0:{config.port}...")
 
     # Run bot polling and web server concurrently
-    await asyncio.gather(
-        dp.start_polling(bot, handle_signals=False),
-        server.serve()
-    )
+    await asyncio.gather(dp.start_polling(bot, handle_signals=False), server.serve())
+
 
 if __name__ == "__main__":
     asyncio.run(main())

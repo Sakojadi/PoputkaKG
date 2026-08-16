@@ -1,9 +1,21 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Boolean, BigInteger, Float, DateTime, Text
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    Integer,
+    String,
+    Text,
+)
+
 from .db import Base
 
+
 class User(Base):
-    __tablename__ = 'users'
+    __tablename__ = "users"
 
     id = Column(BigInteger, primary_key=True)
     username = Column(String, nullable=True)
@@ -11,9 +23,10 @@ class User(Base):
     is_banned = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
 class Campaign(Base):
-    __tablename__ = 'campaigns'
-    
+    __tablename__ = "campaigns"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger)
     publications_total = Column(Integer)
@@ -28,8 +41,9 @@ class Campaign(Base):
     message_ids = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
 class AppSetting(Base):
-    __tablename__ = 'app_settings'
-    
+    __tablename__ = "app_settings"
+
     key = Column(String, primary_key=True)
     value = Column(String)

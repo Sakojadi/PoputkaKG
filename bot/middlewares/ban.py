@@ -1,15 +1,19 @@
-from typing import Callable, Dict, Any, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject, Message, CallbackQuery
+from aiogram.types import CallbackQuery, Message, TelegramObject
+
 from bot.database.db import AsyncSessionLocal
 from bot.database.models import User
+
 
 class BanMiddleware(BaseMiddleware):
     async def __call__(
         self,
-        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
         event: TelegramObject,
-        data: Dict[str, Any]
+        data: dict[str, Any],
     ) -> Any:
         user = data.get("event_from_user")
         if user:
@@ -23,13 +27,18 @@ class BanMiddleware(BaseMiddleware):
                     db_user = User(id=user.id, username=user.username, language="ky")
                     session.add(db_user)
                     await session.commit()
-                    
+
                 if getattr(db_user, "is_banned", False):
                     # Reject all interactions from banned user
                     if isinstance(event, Message):
-                        await event.answer("❌ Сиздин аккаунтуңуз бөгөттөлгөн / Ваш аккаунт заблокирован.")
+                        await event.answer(
+                            "❌ Сиздин аккаунтуңуз бөгөттөлгөн / Ваш аккаунт заблокирован."
+                        )
                     elif isinstance(event, CallbackQuery):
-                        await event.answer("❌ Сиздин аккаунтуңуз бөгөттөлгөн / Ваш аккаунт заблокирован.", show_alert=True)
+                        await event.answer(
+                            "❌ Сиздин аккаунтуңуз бөгөттөлгөн / Ваш аккаунт заблокирован.",
+                            show_alert=True,
+                        )
                     return
-                    
+
         return await handler(event, data)

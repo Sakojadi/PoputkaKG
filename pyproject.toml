@@ -34,4 +34,17 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "ruff>=0.16.3",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+ignore = [
+    "B008",    # Do not perform function call `Depends` in argument defaults (standard FastAPI pattern)
+    "BLE001",  # Do not catch blind exception `Exception` (standard bot fallback)
+    "S110",    # `try`-`except`-`pass` detected
+    "E501",    # Line too long
 ]

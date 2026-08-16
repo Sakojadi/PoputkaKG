@@ -1,7 +1,9 @@
 import logging
+
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base
+
 from bot.config import config
 
 logger = logging.getLogger(__name__)
@@ -15,12 +17,13 @@ AsyncSessionLocal = async_sessionmaker(
     expire_on_commit=False,
 )
 
+
 async def init_db():
     # 1. Create all base tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Base tables created/verified successfully.")
-    
+
     # 2. Run column migrations in separate transactions
     migrations = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR",
@@ -29,9 +32,9 @@ async def init_db():
         "ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS price_paid FLOAT DEFAULT 0.0",
         "ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS last_message_id BIGINT",
         "ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS message_ids TEXT DEFAULT ''",
-        "ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS created_at TIMESTAMP"
+        "ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS created_at TIMESTAMP",
     ]
-    
+
     for sql in migrations:
         try:
             async with engine.begin() as conn:

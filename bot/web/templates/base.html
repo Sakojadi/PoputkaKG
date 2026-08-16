@@ -733,6 +733,9 @@
         {% block content %}{% endblock %}
     </main>
 
+    <!-- Loading Top Progress Bar -->
+    <div id="spaProgressBar" style="position: fixed; top: 0; left: 0; height: 3px; background: var(--accent-gradient); z-index: 99999; width: 0%; opacity: 0; transition: width 0.2s ease, opacity 0.3s ease; pointer-events: none;"></div>
+
     <!-- Mobile Bottom Navigation Bar (App-like UX on phones) -->
     <nav class="mobile-bottom-nav">
         <a href="/admin" class="mobile-nav-btn {% if active_page == 'dashboard' %}active{% endif %}">
@@ -756,5 +759,168 @@
             <span>Опции</span>
         </a>
     </nav>
+
+    <!-- Seamless SPA Navigation Script -->
+    <script>
+        (function() {
+            const bar = document.getElementById('spaProgressBar');
+            const main = document.querySelector('.main-wrapper');
+
+            function startLoading() {
+                bar.style.opacity = '1';
+                bar.style.width = '35%';
+                if (main) main.style.opacity = '0.65';
+            }
+
+            function finishLoading() {
+                bar.style.width = '100%';
+                setTimeout(() => {
+                    bar.style.opacity = '0';
+                    setTimeout(() => { bar.style.width = '0%'; }, 300);
+                }, 150);
+                if (main) main.style.opacity = '1';
+            }
+
+            function updateActiveNav(newDoc) {
+                // Update desktop sidebar
+                const currentNavs = document.querySelectorAll('.nav-item');
+                const newNavs = newDoc.querySelectorAll('.nav-item');
+                currentNavs.forEach((item, idx) => {
+                    if (newNavs[idx]) {
+                        item.className = newNavs[idx].className;
+                    }
+                });
+
+                // Update mobile bottom nav
+                const currentMobileNavs = document.querySelectorAll('.mobile-nav-btn');
+                const newMobileNavs = newDoc.querySelectorAll('.mobile-nav-btn');
+                currentMobileNavs.forEach((item, idx) => {
+                    if (newMobileNavs[idx]) {
+                        item.className = newMobileNavs[idx].className;
+                    }
+                });
+            }
+
+            function executeScripts(container) {
+                const scripts = container.querySelectorAll('script');
+                scripts.forEach(oldScript => {
+                    const newScript = document.createElement('script');
+                    Array.from(oldScript.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value));
+                    newScript.appendChild(document.createTextNode(oldScript.innerHTML));
+                    oldScript.parentNode.replaceChild(newScript, oldScript);
+                });
+            }
+
+            async function navigateTo(url, push = true) {
+                try {
+                    startLoading();
+                    const response = await fetch(url, { headers: { 'X-Requested-With': 'SPA' } });
+                    
+                    if (response.redirected && response.url.includes('/admin/login')) {
+                        window.location.href = response.url;
+                        return;
+                    }
+
+                    const html = await response.text();
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+
+                    const newContent = doc.querySelector('.main-wrapper');
+                    if (newContent && main) {
+                        main.innerHTML = newContent.innerHTML;
+                        document.title = doc.title;
+                        updateActiveNav(doc);
+                        executeScripts(main);
+                        
+                        if (push) {
+                            window.history.pushState({ url: url }, '', url);
+                        }
+                        window.scrollTo({ top: 0, behavior: 'instant' });
+                    } else {
+                        window.location.href = url;
+                    }
+                } catch (err) {
+                    console.error('SPA navigation error:', err);
+                    window.location.href = url;
+                } finally {
+                    finishLoading();
+                }
+            }
+
+            // Intercept internal link clicks
+            document.addEventListener('click', function(e) {
+                const link = e.target.closest('a');
+                if (!link) return;
+
+                const href = link.getAttribute('href');
+                if (!href) return;
+
+                // Ignore external, anchor, target=_blank, and logout links
+                if (
+                    href.startsWith('/admin') &&
+                    !href.startsWith('/admin/logout') &&
+                    !link.getAttribute('target') &&
+                    !link.hasAttribute('download') &&
+                    !e.ctrlKey && !e.metaKey && !e.shiftKey
+                ) {
+                    e.preventDefault();
+                    navigateTo(link.href, true);
+                }
+            });
+
+            // Handle browser Back / Forward buttons
+            window.addEventListener('popstate', function() {
+                navigateTo(window.location.href, false);
+            });
+
+            // Intercept form submissions for instant feedback
+            document.addEventListener('submit', async function(e) {
+                const form = e.target;
+                const action = form.getAttribute('action') || window.location.href;
+                const method = (form.getAttribute('method') || 'GET').toUpperCase();
+
+                if (action.startsWith('/admin') && !action.startsWith('/admin/logout') && !form.hasAttribute('data-no-spa')) {
+                    e.preventDefault();
+                    startLoading();
+                    try {
+                        let response;
+                        if (method === 'POST') {
+                            const formData = new FormData(form);
+                            response = await fetch(action, {
+                                method: 'POST',
+                                body: formData
+                            });
+                        } else {
+                            const params = new URLSearchParams(new FormData(form)).toString();
+                            const fullUrl = action + (action.includes('?') ? '&' : '?') + params;
+                            response = await fetch(fullUrl);
+                        }
+
+                        const targetUrl = response.url || action;
+                        const html = await response.text();
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(html, 'text/html');
+
+                        const newContent = doc.querySelector('.main-wrapper');
+                        if (newContent && main) {
+                            main.innerHTML = newContent.innerHTML;
+                            document.title = doc.title;
+                            updateActiveNav(doc);
+                            executeScripts(main);
+                            window.history.pushState({ url: targetUrl }, '', targetUrl);
+                            window.scrollTo({ top: 0, behavior: 'instant' });
+                        } else {
+                            window.location.href = targetUrl;
+                        }
+                    } catch (err) {
+                        console.error('SPA form submit error:', err);
+                        form.submit();
+                    } finally {
+                        finishLoading();
+                    }
+                }
+            });
+        })();
+    </script>
 </body>
 </html>

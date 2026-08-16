@@ -76,23 +76,31 @@
                     <td style="white-space: nowrap;"><strong style="color: #34d399;">{{ u.total_spent }} сом</strong></td>
                     <td>
                         {% if u.is_banned %}
-                        <span class="badge badge-stopped"><i class="fa-solid fa-ban"></i> Бан</span>
+                        <span class="badge badge-stopped"><i class="fa-solid fa-ban"></i> Заблокирован</span>
                         {% else %}
                         <span class="badge badge-active"><i class="fa-solid fa-user-check"></i> Активен</span>
                         {% endif %}
                     </td>
                     <td>
-                        <form action="/admin/users/{{ u.id }}/toggle-ban" method="POST" style="display: inline;">
-                            {% if u.is_banned %}
-                            <button type="submit" class="btn btn-success" style="padding: 6px 12px; font-size: 12px; min-height: 32px;" title="Разблокировать в боте">
-                                <i class="fa-solid fa-unlock"></i> Снять бан
-                            </button>
-                            {% else %}
-                            <button type="submit" class="btn btn-danger" style="padding: 6px 12px; font-size: 12px; min-height: 32px;" title="Заблокировать доступ к боту">
-                                <i class="fa-solid fa-ban"></i> Забанить
-                            </button>
-                            {% endif %}
-                        </form>
+                        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                            <form action="/admin/users/{{ u.id }}/toggle-ban" method="POST" style="display: inline;">
+                                {% if u.is_banned %}
+                                <button type="submit" class="btn btn-success" style="padding: 6px 10px; font-size: 12px; min-height: 32px;" title="Разблокировать пользователя в боте">
+                                    <i class="fa-solid fa-unlock"></i> Разблокировать в боте
+                                </button>
+                                {% else %}
+                                <button type="submit" class="btn btn-danger" style="padding: 6px 10px; font-size: 12px; min-height: 32px;" title="Заблокировать доступ к боту">
+                                    <i class="fa-solid fa-ban"></i> Заблокировать в боте
+                                </button>
+                                {% endif %}
+                            </form>
+
+                            <form action="/admin/users/{{ u.id }}/kick-from-group" method="POST" style="display: inline;" onsubmit="return confirm('Вы действительно хотите исключить пользователя ID {{ u.id }} (@{{ u.username or 'без username' }}) из Telegram-группы?');">
+                                <button type="submit" class="btn btn-secondary" style="padding: 6px 10px; font-size: 12px; min-height: 32px; color: var(--accent-rose); border-color: rgba(244, 63, 94, 0.4);" title="Исключить участника из группы Telegram">
+                                    <i class="fa-solid fa-user-minus"></i> Исключить из группы
+                                </button>
+                            </form>
+                        </div>
                     </td>
                 </tr>
                 {% else %}

@@ -206,6 +206,11 @@
                 <button type="submit" id="modalBanBtn" class="btn" style="width: 100%; justify-content: center; padding: 12px; font-size: 13px; min-height: 44px;">
                 </button>
             </form>
+            <form id="modalKickForm" action="" method="POST" style="width: 100%;" onsubmit="return confirm('Исключить этого пользователя из Telegram-группы?');">
+                <button type="submit" class="btn btn-secondary" style="width: 100%; justify-content: center; padding: 10px 14px; min-height: 40px; font-size: 13px; color: var(--accent-rose); border-color: rgba(244, 63, 94, 0.4);">
+                    <i class="fa-solid fa-user-minus"></i> Исключить из Telegram-группы
+                </button>
+            </form>
             <a href="/admin/users" class="btn btn-secondary" style="width: 100%; justify-content: center; padding: 10px 14px; min-height: 40px; font-size: 13px;">
                 Все пользователи
             </a>
@@ -247,8 +252,10 @@
         const statusEl = document.getElementById('modalUserStatus');
         const banBtn = document.getElementById('modalBanBtn');
         const banForm = document.getElementById('modalBanForm');
+        const kickForm = document.getElementById('modalKickForm');
 
         banForm.action = `/admin/users/${u.id}/toggle-ban?redirect_to=/admin/campaigns`;
+        kickForm.action = `/admin/users/${u.id}/kick-from-group?redirect_to=/admin/campaigns`;
 
         if (u.is_banned) {
             statusEl.innerHTML = '<span class="badge badge-stopped"><i class="fa-solid fa-ban"></i> Заблокирован</span>';
