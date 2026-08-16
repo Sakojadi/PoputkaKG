@@ -3,7 +3,7 @@ from datetime import datetime
 from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.db import AsyncSessionLocal
@@ -75,9 +75,18 @@ async def start_ad_flow(message: Message, state: FSMContext):
     async with AsyncSessionLocal() as session:
         lang = await get_user_lang(message.from_user.id, session)
         
-    await message.answer(get_text(lang, "ask_count"), reply_markup=ReplyKeyboardRemove())
+    markup = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=get_text(lang, "back_btn"))]], resize_keyboard=True)
+    await message.answer(get_text(lang, "ask_count"), reply_markup=markup)
     await state.set_state(AdFlow.count)
     await state.update_data(lang=lang)
+
+@router.message(AdFlow.count, F.text.in_([TEXTS[l].get("back_btn", "") for l in TEXTS]))
+async def back_from_count(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ky')
+    await state.clear()
+    await message.answer(get_text(lang, "welcome"), reply_markup=main_keyboard(lang))
+
 
 @router.message(AdFlow.count)
 async def process_count(message: Message, state: FSMContext):
@@ -101,10 +110,21 @@ async def process_count(message: Message, state: FSMContext):
         [InlineKeyboardButton(text=get_text(lang, "int_5_min"), callback_data="int_5"), 
          InlineKeyboardButton(text=get_text(lang, "int_10_min"), callback_data="int_10")],
         [InlineKeyboardButton(text=get_text(lang, "int_20_min"), callback_data="int_20"), 
-         InlineKeyboardButton(text=get_text(lang, "int_40_min"), callback_data="int_40")]
+         InlineKeyboardButton(text=get_text(lang, "int_40_min"), callback_data="int_40")],
+        [InlineKeyboardButton(text=get_text(lang, "back_btn"), callback_data="back_count")]
     ])
     await message.answer(get_text(lang, "ask_interval"), reply_markup=markup)
     await state.set_state(AdFlow.interval)
+
+@router.callback_query(AdFlow.interval, F.data == "back_count")
+async def back_from_interval(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ky')
+    await state.set_state(AdFlow.count)
+    markup = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=get_text(lang, "back_btn"))]], resize_keyboard=True)
+    await callback.message.delete()
+    await callback.message.answer(get_text(lang, "ask_count"), reply_markup=markup)
+
 
 @router.callback_query(AdFlow.interval, F.data.startswith("int_"))
 async def process_interval(callback: CallbackQuery, state: FSMContext):
@@ -119,11 +139,29 @@ async def process_interval(callback: CallbackQuery, state: FSMContext):
     summary = get_text(lang, "summary", count=count, interval=interval, price=price)
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=get_text(lang, "pay"), callback_data="pay_yes"), 
-         InlineKeyboardButton(text=get_text(lang, "cancel"), callback_data="pay_no")]
+         InlineKeyboardButton(text=get_text(lang, "cancel"), callback_data="pay_no")],
+        [InlineKeyboardButton(text=get_text(lang, "back_btn"), callback_data="back_interval")]
     ])
     
     await callback.message.edit_text(summary, reply_markup=markup)
     await state.set_state(AdFlow.confirm_payment)
+
+@router.callback_query(AdFlow.confirm_payment, F.data == "back_interval")
+async def back_from_confirm(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ky')
+    await state.set_state(AdFlow.interval)
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=get_text(lang, "int_1_min"), callback_data="int_1"), 
+         InlineKeyboardButton(text=get_text(lang, "int_3_min"), callback_data="int_3")],
+        [InlineKeyboardButton(text=get_text(lang, "int_5_min"), callback_data="int_5"), 
+         InlineKeyboardButton(text=get_text(lang, "int_10_min"), callback_data="int_10")],
+        [InlineKeyboardButton(text=get_text(lang, "int_20_min"), callback_data="int_20"), 
+         InlineKeyboardButton(text=get_text(lang, "int_40_min"), callback_data="int_40")],
+        [InlineKeyboardButton(text=get_text(lang, "back_btn"), callback_data="back_count")]
+    ])
+    await callback.message.edit_text(get_text(lang, "ask_interval"), reply_markup=markup)
+
 
 @router.callback_query(AdFlow.confirm_payment, F.data == "pay_no")
 async def process_cancel_payment(callback: CallbackQuery, state: FSMContext):
@@ -198,7 +236,7 @@ async def process_content(message: Message, state: FSMContext, bot: Bot):
     
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=get_text(lang, "correct_start"), callback_data="content_ok")],
-        [InlineKeyboardButton(text=get_text(lang, "rewrite"), callback_data="content_redo")]
+        [InlineKeyboardButton(text=get_text(lang, "back_btn"), callback_data="content_redo")]
     ])
     
     preview_text = f"{get_text(lang, 'confirm_content')}\n\n{content_text or ''}"
