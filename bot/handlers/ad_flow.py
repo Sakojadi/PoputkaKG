@@ -320,14 +320,65 @@ async def stop_campaign(callback: CallbackQuery):
                     pass
             await session.commit()
             await callback.answer(get_text(lang, "ad_stopped"), show_alert=True)
+            markup = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=get_text(lang, "start_ad"), callback_data=f"resume_{campaign.id}")]
+            ])
             try:
                 msg_text = callback.message.caption if callback.message.photo else callback.message.text
                 new_text = f"{msg_text}\n\n❌ {get_text(lang, 'ad_stopped')}" if msg_text else f"❌ {get_text(lang, 'ad_stopped')}"
                 if callback.message.photo:
-                    await callback.message.edit_caption(caption=new_text, reply_markup=None)
+                    await callback.message.edit_caption(caption=new_text, reply_markup=markup)
                 else:
-                    await callback.message.edit_text(text=new_text, reply_markup=None)
+                    await callback.message.edit_text(text=new_text, reply_markup=markup)
             except Exception:
-                await callback.message.edit_reply_markup(reply_markup=None)
+                await callback.message.edit_reply_markup(reply_markup=markup)
+        else:
+            await callback.answer(get_text(lang, "error_or_stopped"), show_alert=True)
+
+@router.callback_query(F.data.startswith("resume_"))
+async def resume_campaign(callback: CallbackQuery):
+    campaign_id = int(callback.data.split("_")[1])
+    async with AsyncSessionLocal() as session:
+        campaign = await session.get(Campaign, campaign_id)
+        lang = await get_user_lang(callback.from_user.id, session)
+        
+        if campaign and campaign.user_id == callback.from_user.id and not campaign.is_active:
+            if campaign.publications_left <= 0:
+                await callback.answer(get_text(lang, "ad_finished", count=campaign.publications_total), show_alert=True)
+                return
+                
+            campaign.is_active = True
+            
+            job = scheduler.add_job(
+                post_ad, 
+                'interval', 
+                minutes=campaign.interval_minutes,
+                args=[callback.from_user.id, campaign.id]
+            )
+            campaign.job_id = job.id
+            await session.commit()
+            
+            import asyncio
+            asyncio.create_task(post_ad(callback.from_user.id, campaign.id))
+            
+            await callback.answer(get_text(lang, "ad_started"), show_alert=True)
+            
+            markup = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=get_text(lang, "stop_ad"), callback_data=f"stop_{campaign.id}")]
+            ])
+            try:
+                msg_text = callback.message.caption if callback.message.photo else callback.message.text
+                if msg_text:
+                    stop_str = f"❌ {get_text(lang, 'ad_stopped')}"
+                    new_text = msg_text.replace(f"\n\n{stop_str}", "").replace(f"\n{stop_str}", "").replace(stop_str, "")
+                else:
+                    new_text = ""
+                    
+                if callback.message.photo:
+                    await callback.message.edit_caption(caption=new_text, reply_markup=markup)
+                else:
+                    await callback.message.edit_text(text=new_text, reply_markup=markup)
+            except Exception:
+                await callback.message.edit_reply_markup(reply_markup=markup)
         else:
             await callback.answer(get_text(lang, "error_or_stopped"), show_alert=True)

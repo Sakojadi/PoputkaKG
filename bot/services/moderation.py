@@ -120,6 +120,9 @@ async def moderate_image_openai(image_bytes: bytes) -> Tuple[bool, str]:
                     results = data.get("results", [])
                     if results and results[0].get("flagged"):
                         return False, "banned_words_detected"
+                elif resp.status == 429:
+                    logger.warning("OpenAI Rate Limit hit (429). Skipping AI moderation and falling back to pure OCR.")
+                    return True, ""
                 else:
                     err_text = await resp.text()
                     logger.error(f"OpenAI Moderation API error {resp.status}: {err_text}")
