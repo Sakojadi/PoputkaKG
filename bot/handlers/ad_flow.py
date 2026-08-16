@@ -75,17 +75,21 @@ async def start_ad_flow(message: Message, state: FSMContext):
     async with AsyncSessionLocal() as session:
         lang = await get_user_lang(message.from_user.id, session)
         
-    markup = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=get_text(lang, "back_btn"))]], resize_keyboard=True)
+    temp_msg = await message.answer("...", reply_markup=ReplyKeyboardRemove())
+    await temp_msg.delete()
+    
+    markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=get_text(lang, "back_btn"), callback_data="back_main")]])
     await message.answer(get_text(lang, "ask_count"), reply_markup=markup)
     await state.set_state(AdFlow.count)
     await state.update_data(lang=lang)
 
-@router.message(AdFlow.count, F.text.in_([TEXTS[l].get("back_btn", "") for l in TEXTS]))
-async def back_from_count(message: Message, state: FSMContext):
+@router.callback_query(AdFlow.count, F.data == "back_main")
+async def back_from_count(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     lang = data.get('lang', 'ky')
     await state.clear()
-    await message.answer(get_text(lang, "welcome"), reply_markup=main_keyboard(lang))
+    await callback.message.delete()
+    await callback.message.answer(get_text(lang, "welcome"), reply_markup=main_keyboard(lang))
 
 
 @router.message(AdFlow.count)
@@ -121,7 +125,7 @@ async def back_from_interval(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     lang = data.get('lang', 'ky')
     await state.set_state(AdFlow.count)
-    markup = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=get_text(lang, "back_btn"))]], resize_keyboard=True)
+    markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=get_text(lang, "back_btn"), callback_data="back_main")]])
     await callback.message.delete()
     await callback.message.answer(get_text(lang, "ask_count"), reply_markup=markup)
 
@@ -201,7 +205,7 @@ async def check_payment_cb(callback: CallbackQuery, state: FSMContext):
         return
         
     await callback.message.delete()
-    await callback.message.answer(get_text(lang, "payment_confirmed"))
+    await callback.message.answer(get_text(lang, "payment_confirmed"), reply_markup=ReplyKeyboardRemove())
     await state.set_state(AdFlow.content)
 
 @router.message(AdFlow.content)
@@ -254,7 +258,7 @@ async def process_content_redo(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     lang = data.get('lang', 'ky')
     await callback.message.delete()
-    await callback.message.answer(get_text(lang, "payment_confirmed"))
+    await callback.message.answer(get_text(lang, "payment_confirmed"), reply_markup=ReplyKeyboardRemove())
     await state.set_state(AdFlow.content)
 
 @router.callback_query(AdFlow.confirm_content, F.data == "content_ok")
