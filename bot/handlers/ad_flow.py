@@ -67,14 +67,6 @@ async def post_ad(user_id: int, campaign_id: int):
             return
         finally:
             await bot.session.close()
-            
-            bot2 = Bot(token=config.bot_token)
-            try:
-                await bot2.send_message(chat_id=user_id, text=get_text(lang, "ad_finished", count=total_published))
-            except Exception:
-                pass
-            finally:
-                await bot2.session.close()
 
 AD_BUTTON_TEXTS = [TEXTS[l]["ad_button"] for l in TEXTS]
 
