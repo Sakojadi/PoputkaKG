@@ -33,15 +33,10 @@ async def cmd_admin(message: Message):
         total_revenue = rev_result.scalar() or 0
         
     report = (
-        f"📊 <b>Admin Dashboard</b>
-
-"
-        f"👥 Total Users: {total_users}
-"
-        f"📢 Active Ads: {active_campaigns}
-"
-        f"📈 Total Ads Created: {total_campaigns}
-"
+        f"📊 <b>Admin Dashboard</b>\n\n"
+        f"👥 Total Users: {total_users}\n"
+        f"📢 Active Ads: {active_campaigns}\n"
+        f"📈 Total Ads Created: {total_campaigns}\n"
         f"💰 Total Revenue: {total_revenue} сом"
     )
     

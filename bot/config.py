@@ -1,12 +1,35 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
+from pydantic import field_validator
+from typing import List, Union
 
 class Settings(BaseSettings):
     bot_token: str
-    group_id: int | str = ""
+    group_id: Union[int, str] = ""
     xpay_api_key: str = ""
+    openai_api_key: str = ""
     database_url: str = "sqlite+aiosqlite:///bot.db"
     admin_ids: List[int] = []
+
+    @field_validator('admin_ids', mode='before')
+    @classmethod
+    def parse_admin_ids(cls, v):
+        if isinstance(v, str):
+            v = v.strip("[]'\" ")
+            return [int(x.strip()) for x in v.split(",") if x.strip()]
+        return v
+
+    @field_validator('group_id', mode='before')
+    @classmethod
+    def parse_group_id(cls, v):
+        if isinstance(v, str):
+            v = v.strip().strip("'\"")
+            try:
+                return int(v)
+            except ValueError:
+                if not v.startswith("@"):
+                    return f"@{v}"
+                return v
+        return v
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

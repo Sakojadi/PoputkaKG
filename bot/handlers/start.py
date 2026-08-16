@@ -5,14 +5,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from bot.database.models import User
 from bot.database.db import AsyncSessionLocal
-from bot.locales.translations import get_text
+from bot.locales.translations import get_text, TEXTS
 
 router = Router()
 
 async def get_user_lang(user_id: int, session: AsyncSession) -> str:
     result = await session.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-    if user:
+    if user and user.language:
         return user.language
     new_user = User(id=user_id, language='ky')
     session.add(new_user)
@@ -38,14 +38,21 @@ async def cmd_start(message: Message):
             reply_markup=main_keyboard(lang)
         )
 
-@router.message(F.text.in_(['🌐 Тилди өзгөртүү', '🌐 Сменить язык']))
+# Helper list of all language button texts across all languages
+LANG_BUTTON_TEXTS = [TEXTS[l]["lang_button"] for l in TEXTS]
+HELP_BUTTON_TEXTS = [TEXTS[l]["help_button"] for l in TEXTS]
+PRICE_BUTTON_TEXTS = [TEXTS[l]["price_button"] for l in TEXTS]
+
+@router.message(F.text.in_(LANG_BUTTON_TEXTS))
 @router.message(Command("language"))
 async def change_language(message: Message):
+    async with AsyncSessionLocal() as session:
+        lang = await get_user_lang(message.from_user.id, session)
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🇰🇬 Кыргызча", callback_data="lang_ky")],
         [InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru")]
     ])
-    await message.answer("Тилди тандаңыз / Выберите язык:", reply_markup=markup)
+    await message.answer(get_text(lang, "choose_lang"), reply_markup=markup)
 
 @router.callback_query(F.data.startswith("lang_"))
 async def process_lang_change(callback: CallbackQuery):
@@ -56,30 +63,28 @@ async def process_lang_change(callback: CallbackQuery):
         if user:
             user.language = new_lang
             await session.commit()
+        else:
+            user = User(id=callback.from_user.id, language=new_lang)
+            session.add(user)
+            await session.commit()
     
     await callback.message.delete()
     await callback.message.answer(
         get_text(new_lang, "welcome"),
         reply_markup=main_keyboard(new_lang)
     )
-    await callback.answer()
+    await callback.answer(get_text(new_lang, "lang_changed"))
 
-@router.message(F.text.in_(['❓ Жардам', '❓ Помощь']))
+@router.message(F.text.in_(HELP_BUTTON_TEXTS))
+@router.message(Command("help"))
 async def cmd_help(message: Message):
     async with AsyncSessionLocal() as session:
         lang = await get_user_lang(message.from_user.id, session)
-    if lang == 'ky':
-        text = "Жардам:\nБул бот аркылуу группага реклама чыгара аласыз. Реклама берүү баскычын басып, кадамдарды аткарыңыз."
-    else:
-        text = "Помощь:\nС помощью бота вы можете публиковать рекламу в группе. Нажмите кнопку 'Дать рекламу' и следуйте шагам."
-    await message.answer(text)
+    await message.answer(get_text(lang, "help_text"))
 
-@router.message(F.text.in_(['💰 Баасы', '💰 Цены']))
+@router.message(F.text.in_(PRICE_BUTTON_TEXTS))
+@router.message(Command("price"))
 async def cmd_price(message: Message):
     async with AsyncSessionLocal() as session:
         lang = await get_user_lang(message.from_user.id, session)
-    if lang == 'ky':
-        text = "Баасы: 1 публикация — 1.0 сом."
-    else:
-        text = "Цена: 1 публикация — 1.0 сом."
-    await message.answer(text)
+    await message.answer(get_text(lang, "price_text"))

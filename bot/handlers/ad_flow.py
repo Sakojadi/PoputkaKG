@@ -1,3 +1,5 @@
+import logging
+from datetime import datetime
 from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -6,12 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.db import AsyncSessionLocal
 from bot.database.models import Campaign
-from bot.locales.translations import get_text
-from bot.handlers.start import get_user_lang
+from bot.locales.translations import get_text, TEXTS
+from bot.handlers.start import get_user_lang, main_keyboard
 from bot.services.payment import generate_xpay_link, check_xpay_payment
 from bot.services.scheduler import scheduler
+from bot.services.moderation import moderate_full_content
 from bot.config import config
 
+logger = logging.getLogger(__name__)
 router = Router()
 
 class AdFlow(StatesGroup):
@@ -29,6 +33,7 @@ async def post_ad(user_id: int, campaign_id: int):
             return
 
         lang = await get_user_lang(user_id, session)
+        total_published = campaign.publications_total
         
         bot = Bot(token=config.bot_token)
         try:
@@ -36,33 +41,44 @@ async def post_ad(user_id: int, campaign_id: int):
                 await bot.send_photo(chat_id=config.group_id, photo=campaign.content_photo, caption=campaign.content_text or "")
             else:
                 await bot.send_message(chat_id=config.group_id, text=campaign.content_text)
+            
+            logger.info(f"Successfully posted ad for campaign {campaign_id} to {config.group_id}")
+            
+            campaign.publications_left -= 1
+            
+            if campaign.publications_left <= 0:
+                campaign.is_active = False
+                if campaign.job_id:
+                    try:
+                        scheduler.remove_job(campaign.job_id)
+                    except Exception:
+                        pass
+                
+                try:
+                    finish_msg = get_text(lang, "ad_finished", count=total_published)
+                    await bot.send_message(user_id, finish_msg)
+                except Exception as e:
+                    logger.error(f"Failed to send finish msg: {e}")
+
+            await session.commit()
+            
         except Exception as e:
-            print(f"Failed to send ad: {e}")
+            logger.error(f"Failed to send ad: {e}. Target chat_id: {config.group_id}")
+            return
         finally:
             await bot.session.close()
-
-        campaign.publications_left -= 1
-        await session.commit()
-
-        if campaign.publications_left <= 0:
-            campaign.is_active = False
-            await session.commit()
-            if campaign.job_id:
-                try:
-                    scheduler.remove_job(campaign.job_id)
-                except:
-                    pass
             
-            # Send completion msg in a new bot session
             bot2 = Bot(token=config.bot_token)
             try:
-                await bot2.send_message(chat_id=user_id, text=get_text(lang, "ad_finished"))
-            except:
+                await bot2.send_message(chat_id=user_id, text=get_text(lang, "ad_finished", count=total_published))
+            except Exception:
                 pass
             finally:
                 await bot2.session.close()
 
-@router.message(F.text.in_(['📢 Реклама берем', '📢 Дать рекламу']))
+AD_BUTTON_TEXTS = [TEXTS[l]["ad_button"] for l in TEXTS]
+
+@router.message(F.text.in_(AD_BUTTON_TEXTS))
 async def start_ad_flow(message: Message, state: FSMContext):
     async with AsyncSessionLocal() as session:
         lang = await get_user_lang(message.from_user.id, session)
@@ -74,13 +90,13 @@ async def start_ad_flow(message: Message, state: FSMContext):
 @router.message(AdFlow.count)
 async def process_count(message: Message, state: FSMContext):
     data = await state.get_data()
-    lang = data['lang']
+    lang = data.get('lang', 'ky')
     
-    if not message.text.isdigit():
+    if not message.text or not message.text.strip().isdigit():
         await message.answer(get_text(lang, "invalid_number"))
         return
         
-    count = int(message.text)
+    count = int(message.text.strip())
     if count <= 0:
         await message.answer(get_text(lang, "invalid_number"))
         return
@@ -88,9 +104,12 @@ async def process_count(message: Message, state: FSMContext):
     await state.update_data(count=count)
     
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1 мүнөт/мин", callback_data="int_1"), InlineKeyboardButton(text="3 мүнөт/мин", callback_data="int_3")],
-        [InlineKeyboardButton(text="5 мүнөт/мин", callback_data="int_5"), InlineKeyboardButton(text="10 мүнөт/мин", callback_data="int_10")],
-        [InlineKeyboardButton(text="20 мүнөт/мин", callback_data="int_20"), InlineKeyboardButton(text="40 мүнөт/мин", callback_data="int_40")]
+        [InlineKeyboardButton(text=get_text(lang, "int_1_min"), callback_data="int_1"), 
+         InlineKeyboardButton(text=get_text(lang, "int_3_min"), callback_data="int_3")],
+        [InlineKeyboardButton(text=get_text(lang, "int_5_min"), callback_data="int_5"), 
+         InlineKeyboardButton(text=get_text(lang, "int_10_min"), callback_data="int_10")],
+        [InlineKeyboardButton(text=get_text(lang, "int_20_min"), callback_data="int_20"), 
+         InlineKeyboardButton(text=get_text(lang, "int_40_min"), callback_data="int_40")]
     ])
     await message.answer(get_text(lang, "ask_interval"), reply_markup=markup)
     await state.set_state(AdFlow.interval)
@@ -102,7 +121,7 @@ async def process_interval(callback: CallbackQuery, state: FSMContext):
     
     data = await state.get_data()
     count = data['count']
-    lang = data['lang']
+    lang = data.get('lang', 'ky')
     price = count * 1.0
     
     summary = get_text(lang, "summary", count=count, interval=interval, price=price)
@@ -117,8 +136,7 @@ async def process_interval(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(AdFlow.confirm_payment, F.data == "pay_no")
 async def process_cancel_payment(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    lang = data['lang']
-    from bot.handlers.start import main_keyboard
+    lang = data.get('lang', 'ky')
     await state.clear()
     await callback.message.delete()
     await callback.message.answer(get_text(lang, "welcome"), reply_markup=main_keyboard(lang))
@@ -127,7 +145,7 @@ async def process_cancel_payment(callback: CallbackQuery, state: FSMContext):
 async def process_payment(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     count = data['count']
-    lang = data['lang']
+    lang = data.get('lang', 'ky')
     price = count * 1.0
     
     link, payment_id = await generate_xpay_link(price)
@@ -144,7 +162,7 @@ async def process_payment(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(AdFlow.waiting_payment, F.data == "check_pay")
 async def check_payment_cb(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    lang = data['lang']
+    lang = data.get('lang', 'ky')
     payment_id = data['payment_id']
     
     is_paid = await check_xpay_payment(payment_id)
@@ -157,13 +175,33 @@ async def check_payment_cb(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdFlow.content)
 
 @router.message(AdFlow.content)
-async def process_content(message: Message, state: FSMContext):
+async def process_content(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
-    lang = data['lang']
+    lang = data.get('lang', 'ky')
     
-    content_text = message.text or message.caption
+    content_text = message.text or message.caption or ""
     content_photo = message.photo[-1].file_id if message.photo else None
     
+    photo_bytes = None
+    if message.photo:
+        try:
+            photo_file = await bot.get_file(message.photo[-1].file_id)
+            if photo_file.file_path:
+                file_stream = await bot.download_file(photo_file.file_path)
+                if file_stream:
+                    photo_bytes = file_stream.read()
+        except Exception as e:
+            logger.debug(f"Failed to fetch photo for moderation: {e}")
+
+    # Fast multi-stage moderation
+    is_valid, reason = await moderate_full_content(content_text, photo_bytes)
+    if not is_valid:
+        if reason == "links_not_allowed":
+            await message.answer(get_text(lang, "content_links_blocked"))
+        else:
+            await message.answer(get_text(lang, "content_18_blocked"))
+        return
+
     await state.update_data(content_text=content_text, content_photo=content_photo)
     
     markup = InlineKeyboardMarkup(inline_keyboard=[
@@ -182,15 +220,15 @@ async def process_content(message: Message, state: FSMContext):
 @router.callback_query(AdFlow.confirm_content, F.data == "content_redo")
 async def process_content_redo(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    lang = data['lang']
+    lang = data.get('lang', 'ky')
     await callback.message.delete()
     await callback.message.answer(get_text(lang, "payment_confirmed"))
     await state.set_state(AdFlow.content)
 
 @router.callback_query(AdFlow.confirm_content, F.data == "content_ok")
-async def process_content_ok(callback: CallbackQuery, state: FSMContext, bot: Bot):
+async def process_content_ok(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    lang = data['lang']
+    lang = data.get('lang', 'ky')
     
     async with AsyncSessionLocal() as session:
         campaign = Campaign(
@@ -203,28 +241,31 @@ async def process_content_ok(callback: CallbackQuery, state: FSMContext, bot: Bo
             is_active=True
         )
         session.add(campaign)
-        await session.flush()
+        await session.commit()
         
         job = scheduler.add_job(
             post_ad, 
             'interval', 
-            minutes=campaign.interval_minutes, 
+            minutes=campaign.interval_minutes,
             args=[callback.from_user.id, campaign.id]
         )
+        
         campaign.job_id = job.id
+        session.add(campaign)
         await session.commit()
+
+    import asyncio
+    asyncio.create_task(post_ad(callback.from_user.id, campaign.id))
         
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=get_text(lang, "stop_ad"), callback_data=f"stop_{campaign.id}")]
     ])
     
-    from bot.handlers.start import main_keyboard
     await callback.message.delete()
     await callback.message.answer(
         get_text(lang, "accepted", count=data['count'], interval=data['interval']),
         reply_markup=markup
     )
-    await callback.message.answer(get_text(lang, "welcome"), reply_markup=main_keyboard(lang))
     await state.clear()
 
 @router.callback_query(F.data.startswith("stop_"))
@@ -239,10 +280,10 @@ async def stop_campaign(callback: CallbackQuery):
             if campaign.job_id:
                 try:
                     scheduler.remove_job(campaign.job_id)
-                except:
+                except Exception:
                     pass
             await session.commit()
             await callback.answer(get_text(lang, "ad_stopped"), show_alert=True)
             await callback.message.edit_reply_markup(reply_markup=None)
         else:
-            await callback.answer("Error or already stopped.")
+            await callback.answer(get_text(lang, "error_or_stopped"), show_alert=True)
