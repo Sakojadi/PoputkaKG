@@ -18,8 +18,14 @@ async def main():
     start_scheduler()
     
     bot = Bot(token=config.bot_token)
+    
+    # Explicitly remove Telegram command menu button
+    try:
+        await bot.delete_my_commands()
+    except Exception as e:
+        logging.debug(f"Failed to delete commands: {e}")
+        
     dp = Dispatcher()
-
     dp.include_router(get_handlers_router())
 
     await dp.start_polling(bot)

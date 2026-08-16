@@ -1,9 +1,13 @@
 import logging
+import asyncio
 from datetime import datetime
 from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
+from aiogram.types import (
+    Message, ReplyKeyboardMarkup, KeyboardButton, CallbackQuery,
+    InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.db import AsyncSessionLocal
@@ -38,9 +42,16 @@ async def post_ad(user_id: int, campaign_id: int):
         bot = Bot(token=config.bot_token)
         try:
             if campaign.content_photo:
-                await bot.send_photo(chat_id=config.group_id, photo=campaign.content_photo, caption=campaign.content_text or "")
+                await bot.send_photo(
+                    chat_id=config.group_id,
+                    photo=campaign.content_photo,
+                    caption=campaign.content_text or ""
+                )
             else:
-                await bot.send_message(chat_id=config.group_id, text=campaign.content_text)
+                await bot.send_message(
+                    chat_id=config.group_id,
+                    text=campaign.content_text or "."
+                )
             
             logger.info(f"Successfully posted ad for campaign {campaign_id} to {config.group_id}")
             
@@ -75,10 +86,11 @@ async def start_ad_flow(message: Message, state: FSMContext):
     async with AsyncSessionLocal() as session:
         lang = await get_user_lang(message.from_user.id, session)
         
-    temp_msg = await message.answer("...", reply_markup=ReplyKeyboardRemove())
-    await temp_msg.delete()
+
     
-    markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=get_text(lang, "back_btn"), callback_data="back_main")]])
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=get_text(lang, "back_btn"), callback_data="back_main")]
+    ])
     await message.answer(get_text(lang, "ask_count"), reply_markup=markup)
     await state.set_state(AdFlow.count)
     await state.update_data(lang=lang)
@@ -90,7 +102,6 @@ async def back_from_count(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.delete()
     await callback.message.answer(get_text(lang, "welcome"), reply_markup=main_keyboard(lang))
-
 
 @router.message(AdFlow.count)
 async def process_count(message: Message, state: FSMContext):
@@ -125,10 +136,11 @@ async def back_from_interval(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     lang = data.get('lang', 'ky')
     await state.set_state(AdFlow.count)
-    markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=get_text(lang, "back_btn"), callback_data="back_main")]])
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=get_text(lang, "back_btn"), callback_data="back_main")]
+    ])
     await callback.message.delete()
     await callback.message.answer(get_text(lang, "ask_count"), reply_markup=markup)
-
 
 @router.callback_query(AdFlow.interval, F.data.startswith("int_"))
 async def process_interval(callback: CallbackQuery, state: FSMContext):
@@ -165,7 +177,6 @@ async def back_from_confirm(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text=get_text(lang, "back_btn"), callback_data="back_count")]
     ])
     await callback.message.edit_text(get_text(lang, "ask_interval"), reply_markup=markup)
-
 
 @router.callback_query(AdFlow.confirm_payment, F.data == "pay_no")
 async def process_cancel_payment(callback: CallbackQuery, state: FSMContext):
@@ -205,7 +216,7 @@ async def check_payment_cb(callback: CallbackQuery, state: FSMContext):
         return
         
     await callback.message.delete()
-    await callback.message.answer(get_text(lang, "payment_confirmed"), reply_markup=ReplyKeyboardRemove())
+    await callback.message.answer(get_text(lang, "payment_confirmed"))
     await state.set_state(AdFlow.content)
 
 @router.message(AdFlow.content)
@@ -258,7 +269,7 @@ async def process_content_redo(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     lang = data.get('lang', 'ky')
     await callback.message.delete()
-    await callback.message.answer(get_text(lang, "payment_confirmed"), reply_markup=ReplyKeyboardRemove())
+    await callback.message.answer(get_text(lang, "payment_confirmed"))
     await state.set_state(AdFlow.content)
 
 @router.callback_query(AdFlow.confirm_content, F.data == "content_ok")
@@ -290,11 +301,11 @@ async def process_content_ok(callback: CallbackQuery, state: FSMContext):
         session.add(campaign)
         await session.commit()
 
-    import asyncio
     asyncio.create_task(post_ad(callback.from_user.id, campaign.id))
         
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=get_text(lang, "stop_ad"), callback_data=f"stop_{campaign.id}")]
+        [InlineKeyboardButton(text=get_text(lang, "stop_ad"), callback_data=f"stop_{campaign.id}")],
+        [InlineKeyboardButton(text=get_text(lang, "new_ad"), callback_data="start_new_ad")]
     ])
     
     await callback.message.delete()
@@ -302,6 +313,7 @@ async def process_content_ok(callback: CallbackQuery, state: FSMContext):
         get_text(lang, "accepted", count=data['count'], interval=data['interval']),
         reply_markup=markup
     )
+
     await state.clear()
 
 @router.callback_query(F.data.startswith("stop_"))
@@ -320,12 +332,16 @@ async def stop_campaign(callback: CallbackQuery):
                     pass
             await session.commit()
             await callback.answer(get_text(lang, "ad_stopped"), show_alert=True)
+            
             markup = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=get_text(lang, "start_ad"), callback_data=f"resume_{campaign.id}")]
+                [InlineKeyboardButton(text=get_text(lang, "start_ad"), callback_data=f"resume_{campaign.id}")],
+                [InlineKeyboardButton(text=get_text(lang, "new_ad"), callback_data="start_new_ad")]
             ])
+            
+            stop_str = get_text(lang, "ad_stopped")
             try:
                 msg_text = callback.message.caption if callback.message.photo else callback.message.text
-                new_text = f"{msg_text}\n\n❌ {get_text(lang, 'ad_stopped')}" if msg_text else f"❌ {get_text(lang, 'ad_stopped')}"
+                new_text = f"{msg_text}\n\n{stop_str}" if msg_text else stop_str
                 if callback.message.photo:
                     await callback.message.edit_caption(caption=new_text, reply_markup=markup)
                 else:
@@ -358,18 +374,17 @@ async def resume_campaign(callback: CallbackQuery):
             campaign.job_id = job.id
             await session.commit()
             
-            import asyncio
-            asyncio.create_task(post_ad(callback.from_user.id, campaign.id))
-            
             await callback.answer(get_text(lang, "ad_started"), show_alert=True)
             
             markup = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=get_text(lang, "stop_ad"), callback_data=f"stop_{campaign.id}")]
+                [InlineKeyboardButton(text=get_text(lang, "stop_ad"), callback_data=f"stop_{campaign.id}")],
+                [InlineKeyboardButton(text=get_text(lang, "new_ad"), callback_data="start_new_ad")]
             ])
+            
+            stop_str = get_text(lang, "ad_stopped")
             try:
                 msg_text = callback.message.caption if callback.message.photo else callback.message.text
                 if msg_text:
-                    stop_str = f"❌ {get_text(lang, 'ad_stopped')}"
                     new_text = msg_text.replace(f"\n\n{stop_str}", "").replace(f"\n{stop_str}", "").replace(stop_str, "")
                 else:
                     new_text = ""
@@ -382,3 +397,17 @@ async def resume_campaign(callback: CallbackQuery):
                 await callback.message.edit_reply_markup(reply_markup=markup)
         else:
             await callback.answer(get_text(lang, "error_or_stopped"), show_alert=True)
+
+@router.callback_query(F.data == "start_new_ad")
+async def start_new_ad_cb(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    async with AsyncSessionLocal() as session:
+        lang = await get_user_lang(callback.from_user.id, session)
+        
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=get_text(lang, "back_btn"), callback_data="back_main")]
+    ])
+    await state.update_data(lang=lang)
+    await state.set_state(AdFlow.count)
+    await callback.message.answer(get_text(lang, "ask_count"), reply_markup=markup)
+    await callback.answer()
