@@ -52,6 +52,10 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 async def health_check():
     return {"status": "ok"}
 
+@app.get("/.well-known/appspecific/com.chrome.devtools.json")
+async def chrome_devtools_probe():
+    return {}
+
 @app.get("/")
 async def root():
     return RedirectResponse(url="/admin")

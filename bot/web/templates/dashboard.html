@@ -52,51 +52,53 @@
 <div class="table-card">
     <div class="table-header">
         <h3>Последние заказы рекламы</h3>
-        <a href="/admin/campaigns" class="btn btn-secondary" style="font-size: 12px; padding: 6px 12px;">
+        <a href="/admin/campaigns" class="btn btn-secondary" style="font-size: 12px; padding: 6px 12px; min-height: 34px;">
             Все объявления →
         </a>
     </div>
-    <table>
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th>Пользователь</th>
-                <th>Сумма</th>
-                <th>Осталось / Всего</th>
-                <th>Интервал</th>
-                <th>Статус</th>
-                <th>Дата</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for c in recent_campaigns %}
-            <tr>
-                <td>#{{ c.id }}</td>
-                <td><code>{{ c.user_id }}</code></td>
-                <td><strong style="color: #34d399;">{{ c.price_paid }} сом</strong></td>
-                <td>{{ c.publications_left }} / {{ c.publications_total }}</td>
-                <td>{{ c.interval_minutes }} мин</td>
-                <td>
-                    {% if c.is_active and c.publications_left > 0 %}
-                    <span class="badge badge-active"><i class="fa-solid fa-circle-play"></i> Активно</span>
-                    {% elif c.publications_left <= 0 %}
-                    <span class="badge badge-completed"><i class="fa-solid fa-check"></i> Завершено</span>
-                    {% else %}
-                    <span class="badge badge-stopped"><i class="fa-solid fa-circle-stop"></i> Остановлено</span>
-                    {% endif %}
-                </td>
-                <td style="color: var(--text-secondary);">
-                    {{ c.created_at.strftime('%d.%m.%Y %H:%M') if c.created_at else '-' }}
-                </td>
-            </tr>
-            {% else %}
-            <tr>
-                <td colspan="7" style="text-align: center; padding: 30px; color: var(--text-muted);">
-                    Пока нет заказов рекламы.
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div class="table-responsive">
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Пользователь</th>
+                    <th>Сумма</th>
+                    <th>Осталось / Всего</th>
+                    <th>Интервал</th>
+                    <th>Статус</th>
+                    <th>Дата</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in recent_campaigns %}
+                <tr>
+                    <td>#{{ c.id }}</td>
+                    <td><code>{{ c.user_id }}</code></td>
+                    <td><strong style="color: #34d399;">{{ c.price_paid }} сом</strong></td>
+                    <td>{{ c.publications_left }} / {{ c.publications_total }}</td>
+                    <td>{{ c.interval_minutes }} мин</td>
+                    <td>
+                        {% if c.is_active and c.publications_left > 0 %}
+                        <span class="badge badge-active"><i class="fa-solid fa-circle-play"></i> Активно</span>
+                        {% elif c.publications_left <= 0 %}
+                        <span class="badge badge-completed"><i class="fa-solid fa-check"></i> Завершено</span>
+                        {% else %}
+                        <span class="badge badge-stopped"><i class="fa-solid fa-circle-stop"></i> Остановлено</span>
+                        {% endif %}
+                    </td>
+                    <td style="color: var(--text-secondary); white-space: nowrap;">
+                        {{ c.created_at.strftime('%d.%m.%Y %H:%M') if c.created_at else '-' }}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" style="text-align: center; padding: 30px; color: var(--text-muted);">
+                        Пока нет заказов рекламы.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </div>
 {% endblock %}
