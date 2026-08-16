@@ -1,10 +1,12 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import List
 
 class Settings(BaseSettings):
     bot_token: str
     group_id: int | str = ""
     xpay_api_key: str = ""
     database_url: str = "sqlite+aiosqlite:///bot.db"
+    admin_ids: List[int] = []
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

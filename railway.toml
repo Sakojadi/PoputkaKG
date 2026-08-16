@@ -1,0 +1,3 @@
+[deploy]
+startCommand = "uv run python -m bot.main"
+restartPolicyType = "on_failure"
