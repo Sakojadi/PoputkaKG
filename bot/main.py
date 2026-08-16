@@ -31,7 +31,7 @@ async def main():
         
     dp = Dispatcher()
     
-    # Register global BanMiddleware on outer middleware (intercepts before any handlers)
+    # Register global BanMiddleware
     ban_middleware = BanMiddleware()
     dp.message.outer_middleware(ban_middleware)
     dp.callback_query.outer_middleware(ban_middleware)
@@ -43,17 +43,17 @@ async def main():
         app=fastapi_app,
         host="0.0.0.0",
         port=config.port,
-        log_level="warning",
-        loop="asyncio"
+        log_level="info",
+        access_log=True
     )
     server = uvicorn.Server(uvi_config)
 
     logger.info(f"Database dialect: {config.database_url.split('://')[0]}")
-    logger.info(f"Starting Bot & Web Admin Panel concurrently on port {config.port}...")
+    logger.info(f"Starting Bot & Web Admin Panel on 0.0.0.0:{config.port}...")
 
-    # Run bot polling and web server concurrently in the same event loop
+    # Run bot polling and web server concurrently
     await asyncio.gather(
-        dp.start_polling(bot),
+        dp.start_polling(bot, handle_signals=False),
         server.serve()
     )
 

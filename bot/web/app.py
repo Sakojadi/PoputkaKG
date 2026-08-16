@@ -48,6 +48,10 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         return RedirectResponse(url=exc.headers["Location"])
     return HTMLResponse(content=f"Error: {exc.detail}", status_code=exc.status_code)
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
 @app.get("/")
 async def root():
     return RedirectResponse(url="/admin")
