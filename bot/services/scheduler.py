@@ -3,7 +3,7 @@ from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from bot.config import config
 
 jobstores = {
-    'default': SQLAlchemyJobStore(url=config.database_url.replace('+aiosqlite', ''))
+    'default': SQLAlchemyJobStore(url=config.database_url.replace('+aiosqlite', '').replace('+asyncpg', ''))
 }
 
 scheduler = AsyncIOScheduler(jobstores=jobstores)

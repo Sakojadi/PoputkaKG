@@ -31,6 +31,18 @@ class Settings(BaseSettings):
                 return v
         return v
 
+
+    @field_validator('database_url', mode='before')
+    @classmethod
+    def parse_db_url(cls, v):
+        if not v:
+            return "sqlite+aiosqlite:///bot.db"
+        if v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql+asyncpg://", 1)
+        if v.startswith("postgresql://") and not v.startswith("postgresql+asyncpg://"):
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 config = Settings()
