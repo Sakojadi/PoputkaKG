@@ -47,11 +47,15 @@ def moderate_text(text: str) -> Tuple[bool, str]:
     if not text:
         return True, ""
 
-    if URL_PATTERN.search(text):
-        return False, "links_not_allowed"
+    urls = URL_PATTERN.findall(text)
+    if urls:
+        for url in urls:
+            u_lower = url.lower()
+            if not any(allowed in u_lower for allowed in ["wa.me", "whatsapp.com", "t.me", "telegram.me", "tg://"]):
+                return False, "links_not_allowed"
 
-    if MENTION_PATTERN.search(text):
-        return False, "links_not_allowed"
+    # Allow @mentions for contacts
+    pass
 
     for pattern in BANNED_PATTERNS:
         if pattern.search(text):

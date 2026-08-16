@@ -236,14 +236,16 @@ async def process_content(message: Message, state: FSMContext, bot: Bot):
     
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=get_text(lang, "correct_start"), callback_data="content_ok")],
-        [InlineKeyboardButton(text=get_text(lang, "back_btn"), callback_data="content_redo")]
+        [InlineKeyboardButton(text=get_text(lang, "rewrite"), callback_data="content_redo")]
     ])
     
-    preview_text = f"{get_text(lang, 'confirm_content')}\n\n{content_text or ''}"
+    await message.answer(get_text(lang, 'confirm_content'))
+    
     if content_photo:
-        await message.answer_photo(content_photo, caption=preview_text, reply_markup=markup)
+        await message.answer_photo(content_photo, caption=content_text, reply_markup=markup)
     else:
-        await message.answer(preview_text, reply_markup=markup)
+        safe_text = content_text if content_text else "."
+        await message.answer(safe_text, reply_markup=markup)
         
     await state.set_state(AdFlow.confirm_content)
 
