@@ -48,6 +48,7 @@ async def main():
     )
     server = uvicorn.Server(uvi_config)
 
+    logger.info(f"Database dialect: {config.database_url.split('://')[0]}")
     logger.info(f"Starting Bot & Web Admin Panel concurrently on port {config.port}...")
 
     # Run bot polling and web server concurrently in the same event loop

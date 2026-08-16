@@ -43,13 +43,16 @@ class Settings(BaseSettings):
     @field_validator('database_url', mode='before')
     @classmethod
     def parse_db_url(cls, v):
-        if not v:
+        env_db = os.getenv("DATABASE_URL") or os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_PRIVATE_URL") or os.getenv("POSTGRES_URL")
+        val = env_db or v
+        if not val:
             return "sqlite+aiosqlite:///bot.db"
-        if v.startswith("postgres://"):
-            return v.replace("postgres://", "postgresql+asyncpg://", 1)
-        if v.startswith("postgresql://") and not v.startswith("postgresql+asyncpg://"):
-            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
-        return v
+        val = str(val).strip().strip("'\"")
+        if val.startswith("postgres://"):
+            return val.replace("postgres://", "postgresql+asyncpg://", 1)
+        if val.startswith("postgresql://") and not val.startswith("postgresql+asyncpg://"):
+            return val.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return val
 
     @field_validator('port', mode='before')
     @classmethod
