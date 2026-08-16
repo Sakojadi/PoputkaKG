@@ -320,6 +320,14 @@ async def stop_campaign(callback: CallbackQuery):
                     pass
             await session.commit()
             await callback.answer(get_text(lang, "ad_stopped"), show_alert=True)
-            await callback.message.edit_reply_markup(reply_markup=None)
+            try:
+                msg_text = callback.message.caption if callback.message.photo else callback.message.text
+                new_text = f"{msg_text}\n\n❌ {get_text(lang, 'ad_stopped')}" if msg_text else f"❌ {get_text(lang, 'ad_stopped')}"
+                if callback.message.photo:
+                    await callback.message.edit_caption(caption=new_text, reply_markup=None)
+                else:
+                    await callback.message.edit_text(text=new_text, reply_markup=None)
+            except Exception:
+                await callback.message.edit_reply_markup(reply_markup=None)
         else:
             await callback.answer(get_text(lang, "error_or_stopped"), show_alert=True)

@@ -113,15 +113,18 @@ async def moderate_image_openai(image_bytes: bytes) -> Tuple[bool, str]:
                 "https://api.openai.com/v1/moderations",
                 json=payload,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=2.5)
+                timeout=aiohttp.ClientTimeout(total=15.0)
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     results = data.get("results", [])
                     if results and results[0].get("flagged"):
                         return False, "banned_words_detected"
+                else:
+                    err_text = await resp.text()
+                    logger.error(f"OpenAI Moderation API error {resp.status}: {err_text}")
     except Exception as e:
-        logger.debug(f"OpenAI Moderation skipped or timed out: {e}")
+        logger.error(f"OpenAI Moderation skipped or timed out: {e}")
 
     return True, ""
 
