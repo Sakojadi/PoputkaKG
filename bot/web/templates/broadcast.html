@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+
+{% block title %}Рассылка & Промо | Poputka Bot{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-title">
+        <h2>Массовая рассылка & Публикация в группу</h2>
+        <p>Создание кастомных постов с динамическими кнопками (до 5 штук) и рассылка пользователям</p>
+    </div>
+</div>
+
+{% if msg %}
+<div class="alert alert-success">
+    <i class="fa-solid fa-circle-check"></i> {{ msg }}
+</div>
+{% endif %}
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 24px;">
+    
+    <!-- 1. Custom Group Post / Promo Creator -->
+    <div class="card">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
+            <div class="stat-icon icon-purple"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
+            <div>
+                <h3 style="font-size: 16px; font-weight: 700;">Пост / Промо в Telegram-группу</h3>
+                <p style="font-size: 12px; color: var(--text-secondary);">Сообщение с кнопками (до 5 штук)</p>
+            </div>
+        </div>
+
+        <!-- Quick Templates Bar -->
+        <div style="margin-bottom: 18px;">
+            <label class="form-label" style="font-size: 12px;">Быстрые шаблоны:</label>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <button type="button" class="btn btn-secondary" style="font-size: 12px; padding: 6px 12px;" onclick="applyTemplate('ky')">
+                    🇰🇬 Промо (Кыргызча)
+                </button>
+                <button type="button" class="btn btn-secondary" style="font-size: 12px; padding: 6px 12px;" onclick="applyTemplate('ru')">
+                    🇷🇺 Промо (Русский)
+                </button>
+                <button type="button" class="btn btn-secondary" style="font-size: 12px; padding: 6px 12px;" onclick="clearAll()">
+                    🧹 Очистить
+                </button>
+            </div>
+        </div>
+
+        <form action="/admin/broadcast/group-post" method="POST" id="promoForm">
+            <div class="form-group">
+                <label class="form-label">Текст сообщения в группу</label>
+                <textarea id="group_text" name="text" class="form-control" rows="4" placeholder="Введите текст сообщения..." required></textarea>
+            </div>
+
+            <!-- Dynamic Buttons Container -->
+            <div style="margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <label class="form-label" style="margin-bottom: 0;">
+                        Кнопки действия (<span id="buttonCount">1</span>/5)
+                    </label>
+                    <button type="button" id="addBtn" class="btn btn-secondary" style="font-size: 12px; padding: 4px 10px;" onclick="addButton()">
+                        <i class="fa-solid fa-plus"></i> Добавить кнопку
+                    </button>
+                </div>
+
+                <div id="buttonsList" style="display: flex; flex-direction: column; gap: 10px;">
+                    <!-- Buttons will be dynamically inserted here -->
+                </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center; padding: 12px;">
+                <i class="fa-solid fa-paper-plane"></i> Опубликовать пост в группу
+            </button>
+        </form>
+    </div>
+
+    <!-- 2. Direct DM Broadcast to Users -->
+    <div class="card">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
+            <div class="stat-icon icon-blue"><i class="fa-solid fa-bullhorn"></i></div>
+            <div>
+                <h3 style="font-size: 16px; font-weight: 700;">Рассылка в личные сообщения</h3>
+                <p style="font-size: 12px; color: var(--text-secondary);">Отправка сообщений всем пользователям бота</p>
+            </div>
+        </div>
+
+        <form action="/admin/broadcast/users" method="POST">
+            <div class="form-group">
+                <label class="form-label">Аудитория</label>
+                <select name="target_lang" class="form-control">
+                    <option value="all">🌐 Всем пользователям ({{ total_users }})</option>
+                    <option value="ky">🇰🇬 Только кыргызскоязычным</option>
+                    <option value="ru">🇷🇺 Только русскоязычным</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Текст рассылки</label>
+                <textarea name="text" class="form-control" rows="6" placeholder="Введите текст для отправки пользователям..." required></textarea>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center; padding: 12px;" onclick="return confirm('Начать рассылку всем выбранным пользователям?');">
+                <i class="fa-solid fa-paper-plane"></i> Запустить рассылку в личку
+            </button>
+        </form>
+    </div>
+
+</div>
+
+<script>
+    const botUsername = "{{ bot_username }}";
+    const defaultBotUrl = botUsername ? `https://t.me/${botUsername}` : "https://t.me/your_bot";
+    const MAX_BUTTONS = 5;
+
+    function getButtonRows() {
+        return document.querySelectorAll('.button-row');
+    }
+
+    function updateButtonCount() {
+        const count = getButtonRows().length;
+        document.getElementById('buttonCount').innerText = count;
+        const addBtn = document.getElementById('addBtn');
+        if (count >= MAX_BUTTONS) {
+            addBtn.disabled = true;
+            addBtn.style.opacity = '0.5';
+            addBtn.style.cursor = 'not-allowed';
+        } else {
+            addBtn.disabled = false;
+            addBtn.style.opacity = '1';
+            addBtn.style.cursor = 'pointer';
+        }
+    }
+
+    function addButton(text = "", url = "") {
+        const container = document.getElementById('buttonsList');
+        const rows = getButtonRows();
+        if (rows.length >= MAX_BUTTONS) return;
+
+        const rowId = 'btn_row_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+        const div = document.createElement('div');
+        div.className = 'button-row';
+        div.id = rowId;
+        div.style.cssText = 'background: rgba(0, 0, 0, 0.25); padding: 12px; border-radius: 12px; border: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; position: relative;';
+
+        div.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 11px; font-weight: 700; color: #a78bfa;">
+                    <i class="fa-solid fa-link"></i> Кнопка ${rows.length + 1}
+                </span>
+                ${rows.length > 0 ? `<button type="button" onclick="removeButton('${rowId}')" style="background: none; border: none; color: var(--accent-rose); cursor: pointer; font-size: 12px;"><i class="fa-solid fa-trash"></i> Удалить</button>` : ''}
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <input type="text" name="btn_text" placeholder="Текст на кнопке..." class="form-control" style="padding: 8px 12px; font-size: 13px;" value="${text}" required>
+                <input type="url" name="btn_url" placeholder="https://..." class="form-control" style="padding: 8px 12px; font-size: 13px;" value="${url}" required>
+            </div>
+        `;
+
+        container.appendChild(div);
+        updateButtonCount();
+    }
+
+    function removeButton(id) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.remove();
+            updateButtonCount();
+        }
+    }
+
+    function clearAll() {
+        document.getElementById('group_text').value = "";
+        document.getElementById('buttonsList').innerHTML = "";
+        addButton("", "");
+    }
+
+    function applyTemplate(lang) {
+        document.getElementById('buttonsList').innerHTML = "";
+        if (lang === 'ky') {
+            document.getElementById('group_text').value = "Сиз да реклама бергиңиз келеби? Ушул ботко жазыңыз!";
+            addButton("Ботко өтүү! 🚀", defaultBotUrl);
+        } else {
+            document.getElementById('group_text').value = "Хотите разместить свою рекламу? Напишите нашему боту!";
+            addButton("Перейти в бот! 🚀", defaultBotUrl);
+        }
+    }
+
+    // Default init with 1 button
+    window.addEventListener('DOMContentLoaded', () => {
+        applyTemplate('ky');
+    });
+</script>
+{% endblock %}

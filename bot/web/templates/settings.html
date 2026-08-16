@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}Настройки | Poputka Bot{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-title">
+        <h2>Настройки системы</h2>
+        <p>Параметры стоимости, пароль администратора и фильтры модерации</p>
+    </div>
+</div>
+
+{% if msg %}
+<div class="alert alert-success">
+    <i class="fa-solid fa-circle-check"></i> {{ msg }}
+</div>
+{% endif %}
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 24px;">
+    <!-- Price & Admin Password -->
+    <div class="card">
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 20px;">
+            <i class="fa-solid fa-shield-halved" style="color: var(--accent-primary);"></i> Доступ и Тарифы
+        </h3>
+
+        <form action="/admin/settings/general" method="POST">
+            <div class="form-group">
+                <label class="form-label">Стоимость 1 публикации (в сомах)</label>
+                <input type="number" step="0.1" name="price_per_ad" value="{{ price_per_ad }}" class="form-control" required>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Новый пароль администратора</label>
+                <input type="password" name="new_password" placeholder="Оставьте пустым, если не меняете" class="form-control">
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="padding: 10px 20px;">
+                <i class="fa-solid fa-floppy-disk"></i> Сохранить настройки
+            </button>
+        </form>
+    </div>
+
+    <!-- Moderation Rules Info -->
+    <div class="card">
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 20px;">
+            <i class="fa-solid fa-shield-virus" style="color: var(--accent-emerald);"></i> Статус Модерации
+        </h3>
+
+        <div style="display: flex; flex-direction: column; gap: 14px; font-size: 14px;">
+            <div style="display: flex; justify-content: space-between; padding-bottom: 10px; border-bottom: 1px solid var(--border);">
+                <span style="color: var(--text-secondary);">Количество запрещенных паттернов:</span>
+                <strong>{{ banned_words_count }} правил</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding-bottom: 10px; border-bottom: 1px solid var(--border);">
+                <span style="color: var(--text-secondary);">OCR сканирование текста (Tesseract):</span>
+                <span class="badge badge-active">Активно</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding-bottom: 10px; border-bottom: 1px solid var(--border);">
+                <span style="color: var(--text-secondary);">OpenAI Multi-Modal Vision (NSFW check):</span>
+                <span class="badge badge-active">Активно (omni)</span>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+                <span style="color: var(--text-secondary);">Разрешенные контакты:</span>
+                <span>WhatsApp, Telegram (@username)</span>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

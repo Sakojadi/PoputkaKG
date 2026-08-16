@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+
+{% block title %}Пользователи | Poputka Bot{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-title">
+        <h2>Пользователи бота</h2>
+        <p>База пользователей, поиск по ID и @username, управление доступом</p>
+    </div>
+</div>
+
+{% if msg %}
+<div class="alert alert-success">
+    <i class="fa-solid fa-circle-check"></i> {{ msg }}
+</div>
+{% endif %}
+
+<!-- Search and Filter Bar -->
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; gap: 16px; flex-wrap: wrap;">
+    <form action="/admin/users" method="GET" style="display: flex; gap: 10px; max-width: 450px; flex-grow: 1;">
+        <input type="text" name="q" value="{{ q }}" placeholder="Поиск по Telegram ID или @username..." class="form-control" style="padding: 10px 16px;">
+        <button type="submit" class="btn btn-primary" style="padding: 10px 18px;">
+            <i class="fa-solid fa-magnifying-glass"></i> Найти
+        </button>
+        {% if q %}
+        <a href="/admin/users" class="btn btn-secondary" style="padding: 10px 14px;" title="Сбросить поиск">
+            <i class="fa-solid fa-xmark"></i>
+        </a>
+        {% endif %}
+    </form>
+    
+    <div style="font-size: 13px; color: var(--text-secondary);">
+        Найдено: <strong>{{ total_items }}</strong> пользователей
+    </div>
+</div>
+
+<div class="table-card">
+    <div class="table-header">
+        <h3>Пользователи (Страница {{ page }} из {{ total_pages }})</h3>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>Telegram ID</th>
+                <th>Username</th>
+                <th>Язык</th>
+                <th>Объявлений</th>
+                <th>Потрачено</th>
+                <th>Статус в боте</th>
+                <th>Управление</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for u in users %}
+            <tr>
+                <td><code>{{ u.id }}</code></td>
+                <td>
+                    {% if u.username %}
+                    <a href="https://t.me/{{ u.username }}" target="_blank" style="color: #60a5fa; text-decoration: none; font-weight: 600;">
+                        @{{ u.username }}
+                    </a>
+                    {% else %}
+                    <span style="color: var(--text-muted); font-size: 12px;">Без юзернейма</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if u.language == 'ky' %}
+                    <span>🇰🇬 Кыргызча</span>
+                    {% else %}
+                    <span>🇷🇺 Русский</span>
+                    {% endif %}
+                </td>
+                <td>{{ u.campaigns_count }}</td>
+                <td><strong style="color: #34d399;">{{ u.total_spent }} сом</strong></td>
+                <td>
+                    {% if u.is_banned %}
+                    <span class="badge badge-stopped"><i class="fa-solid fa-ban"></i> Заблокирован</span>
+                    {% else %}
+                    <span class="badge badge-active"><i class="fa-solid fa-user-check"></i> Активен</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <form action="/admin/users/{{ u.id }}/toggle-ban" method="POST" style="display: inline;">
+                        {% if u.is_banned %}
+                        <button type="submit" class="btn btn-success" style="padding: 6px 12px; font-size: 12px;" title="Разблокировать в боте">
+                            <i class="fa-solid fa-unlock"></i> Разблокировать
+                        </button>
+                        {% else %}
+                        <button type="submit" class="btn btn-danger" style="padding: 6px 12px; font-size: 12px;" title="Заблокировать доступ к боту">
+                            <i class="fa-solid fa-ban"></i> Заблокировать
+                        </button>
+                        {% endif %}
+                    </form>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="7" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                    Пользователей не найдено.
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Pagination Controls -->
+{% if total_pages > 1 %}
+<div style="display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 24px;">
+    {% if page > 1 %}
+    <a href="/admin/users?page={{ page - 1 }}{% if q %}&q={{ q }}{% endif %}" class="btn btn-secondary">
+        ← Предыдущая
+    </a>
+    {% endif %}
+
+    <span style="font-size: 14px; font-weight: 600; color: var(--text-secondary);">
+        Страница {{ page }} из {{ total_pages }}
+    </span>
+
+    {% if page < total_pages %}
+    <a href="/admin/users?page={{ page + 1 }}{% if q %}&q={{ q }}{% endif %}" class="btn btn-secondary">
+        Следующая →
+    </a>
+    {% endif %}
+</div>
+{% endif %}
+{% endblock %}

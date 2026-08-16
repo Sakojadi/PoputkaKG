@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+
+{% block title %}Управление рекламой | Poputka Bot{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-title">
+        <h2>Рекламные кампании</h2>
+        <p>Список всех объявлений, управление интервалами и удаление постов из группы</p>
+    </div>
+</div>
+
+{% if msg %}
+<div class="alert alert-success">
+    <i class="fa-solid fa-circle-check"></i> {{ msg }}
+</div>
+{% endif %}
+
+<!-- Search and Filter Bar -->
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; gap: 16px; flex-wrap: wrap;">
+    <form action="/admin/campaigns" method="GET" style="display: flex; gap: 10px; max-width: 450px; flex-grow: 1;">
+        <input type="text" name="q" value="{{ q }}" placeholder="Поиск по ID, User ID или тексту..." class="form-control" style="padding: 10px 16px;">
+        <button type="submit" class="btn btn-primary" style="padding: 10px 18px;">
+            <i class="fa-solid fa-magnifying-glass"></i> Найти
+        </button>
+        {% if q %}
+        <a href="/admin/campaigns" class="btn btn-secondary" style="padding: 10px 14px;" title="Сбросить поиск">
+            <i class="fa-solid fa-xmark"></i>
+        </a>
+        {% endif %}
+    </form>
+    
+    <div style="font-size: 13px; color: var(--text-secondary);">
+        Найдено: <strong>{{ total_items }}</strong> объявлений
+    </div>
+</div>
+
+<div class="table-card">
+    <div class="table-header">
+        <h3>Объявления (Страница {{ page }} из {{ total_pages }})</h3>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Пользователь</th>
+                <th>Содержание</th>
+                <th>Осталось / Всего</th>
+                <th>Интервал</th>
+                <th>Сумма</th>
+                <th>Статус</th>
+                <th>Управление</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for c in campaigns %}
+            <tr>
+                <td>#{{ c.id }}</td>
+                <td>
+                    <button type="button" class="btn btn-secondary" style="padding: 4px 10px; font-size: 13px; font-family: monospace; border-radius: 8px;" onclick="showUserModal({{ c.user_id }})">
+                        <i class="fa-solid fa-user" style="color: #60a5fa; font-size: 11px;"></i> {{ c.user_id }}
+                    </button>
+                </td>
+                <td style="max-width: 280px;">
+                    <div style="display: flex; gap: 12px; align-items: flex-start;">
+                        {% if c.content_photo %}
+                        <img src="/admin/media/photo/{{ c.content_photo }}" 
+                             alt="Фото" 
+                             onclick="openImageModal('/admin/media/photo/{{ c.content_photo }}')"
+                             style="width: 52px; height: 52px; object-fit: cover; border-radius: 10px; border: 1px solid rgba(255,255,255,0.15); cursor: pointer; flex-shrink: 0; transition: transform 0.2s; box-shadow: 0 4px 10px rgba(0,0,0,0.3);"
+                             onmouseover="this.style.transform='scale(1.08)'"
+                             onmouseout="this.style.transform='scale(1)'"
+                             title="Нажмите, чтобы увеличить фото">
+                        {% endif %}
+                        <span style="font-size: 13px; color: var(--text-secondary); line-height: 1.4;">
+                            {{ (c.content_text[:85] + '...') if c.content_text and c.content_text|length > 85 else (c.content_text or 'Без текста') }}
+                        </span>
+                    </div>
+                </td>
+                <td><strong>{{ c.publications_left }}</strong> / {{ c.publications_total }}</td>
+                <td>{{ c.interval_minutes }} мин</td>
+                <td><strong style="color: #34d399;">{{ c.price_paid }} сом</strong></td>
+                <td>
+                    {% if c.is_active and c.publications_left > 0 %}
+                    <span class="badge badge-active"><i class="fa-solid fa-circle-play"></i> Идет рассылка</span>
+                    {% elif c.publications_left <= 0 %}
+                    <span class="badge badge-completed"><i class="fa-solid fa-check"></i> Завершено</span>
+                    {% else %}
+                    <span class="badge badge-stopped"><i class="fa-solid fa-circle-stop"></i> Остановлено</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                        {% if c.is_active and c.publications_left > 0 %}
+                        <form action="/admin/campaigns/{{ c.id }}/stop" method="POST" style="display: inline;">
+                            <button type="submit" class="btn btn-danger" style="padding: 6px 10px; font-size: 12px;" title="Остановить публикацию">
+                                <i class="fa-solid fa-stop"></i> Стоп
+                            </button>
+                        </form>
+                        {% elif not c.is_active and c.publications_left > 0 %}
+                        <form action="/admin/campaigns/{{ c.id }}/resume" method="POST" style="display: inline;">
+                            <button type="submit" class="btn btn-success" style="padding: 6px 10px; font-size: 12px;" title="Возобновить публикацию">
+                                <i class="fa-solid fa-play"></i> Пуск
+                            </button>
+                        </form>
+                        {% endif %}
+
+                        <form action="/admin/campaigns/{{ c.id }}/delete" method="POST" style="display: inline;" onsubmit="return confirm('Удалить ТОЛЬКО из базы данных?');">
+                            <input type="hidden" name="delete_from_group" value="false">
+                            <button type="submit" class="btn btn-secondary" style="padding: 6px 10px; font-size: 12px;" title="Удалить только из базы данных">
+                                <i class="fa-solid fa-database"></i> БД
+                            </button>
+                        </form>
+
+                        <form action="/admin/campaigns/{{ c.id }}/delete" method="POST" style="display: inline;" onsubmit="return confirm('⚠️ ВНИМАНИЕ: Это удалит объявление из базы И СТЕРЕТ ВСЕ СООБЩЕНИЯ ЭТОГО ОБЪЯВЛЕНИЯ ИЗ ГРУППЫ! Продолжить?');">
+                            <input type="hidden" name="delete_from_group" value="true">
+                            <button type="submit" class="btn btn-secondary" style="padding: 6px 10px; font-size: 12px; color: var(--accent-rose); border-color: rgba(244, 63, 94, 0.4);" title="Стереть из группы Telegram и удалить из базы">
+                                <i class="fa-solid fa-trash-can"></i> Стереть из группы
+                            </button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                    Объявлений не найдено.
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Pagination Controls -->
+{% if total_pages > 1 %}
+<div style="display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 24px;">
+    {% if page > 1 %}
+    <a href="/admin/campaigns?page={{ page - 1 }}{% if q %}&q={{ q }}{% endif %}" class="btn btn-secondary">
+        ← Предыдущая
+    </a>
+    {% endif %}
+
+    <span style="font-size: 14px; font-weight: 600; color: var(--text-secondary);">
+        Страница {{ page }} из {{ total_pages }}
+    </span>
+
+    {% if page < total_pages %}
+    <a href="/admin/campaigns?page={{ page + 1 }}{% if q %}&q={{ q }}{% endif %}" class="btn btn-secondary">
+        Следующая →
+    </a>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- Full Image Preview Lightbox Modal -->
+<div id="imageModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(12px); z-index: 2000; align-items: center; justify-content: center; padding: 20px;">
+    <div style="position: relative; max-width: 90vw; max-height: 90vh; display: flex; flex-direction: column; align-items: center;">
+        <button type="button" onclick="closeImageModal()" style="position: absolute; top: -45px; right: 0; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: #fff; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer;">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+        <img id="previewImageSrc" src="" alt="Full Preview" style="max-width: 85vw; max-height: 80vh; object-fit: contain; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.2);">
+    </div>
+</div>
+
+<!-- Modal Dialog for User Actions -->
+<div id="userModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: #111827; border: 1px solid rgba(255,255,255,0.15); border-radius: 20px; width: 90%; max-width: 440px; padding: 28px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); position: relative;">
+        
+        <button type="button" onclick="closeUserModal()" style="position: absolute; top: 20px; right: 20px; background: none; border: none; color: var(--text-secondary); font-size: 18px; cursor: pointer;">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+
+        <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 20px;">
+            <div class="stat-icon icon-blue"><i class="fa-solid fa-user"></i></div>
+            <div>
+                <h3 style="font-size: 18px; font-weight: 700;">Пользователь</h3>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <code id="modalUserId" style="font-size: 14px; color: #60a5fa;">-</code>
+                    <span id="modalUserUsername" style="font-size: 13px; color: #a78bfa;"></span>
+                </div>
+            </div>
+        </div>
+
+        <div style="background: rgba(0,0,0,0.3); border-radius: 12px; padding: 16px; border: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; margin-bottom: 24px; font-size: 14px;">
+            <div style="display: flex; justify-content: space-between;">
+                <span style="color: var(--text-secondary);">Язык:</span>
+                <strong id="modalUserLang">-</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+                <span style="color: var(--text-secondary);">Всего объявлений:</span>
+                <strong id="modalUserCampaigns">-</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+                <span style="color: var(--text-secondary);">Потрачено:</span>
+                <strong id="modalUserSpent" style="color: #34d399;">-</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+                <span style="color: var(--text-secondary);">Статус в боте:</span>
+                <span id="modalUserStatus">-</span>
+            </div>
+        </div>
+
+        <div style="display: flex; gap: 10px;">
+            <form id="modalBanForm" action="" method="POST" style="flex: 1;">
+                <button type="submit" id="modalBanBtn" class="btn" style="width: 100%; justify-content: center; padding: 12px; font-size: 13px;">
+                </button>
+            </form>
+            <a href="/admin/users" class="btn btn-secondary" style="padding: 12px 16px;">
+                Все пользователи
+            </a>
+        </div>
+    </div>
+</div>
+
+<script>
+    const userMap = {{ user_map|tojson|safe }};
+
+    function openImageModal(imgUrl) {
+        document.getElementById('previewImageSrc').src = imgUrl;
+        document.getElementById('imageModal').style.display = 'flex';
+    }
+
+    function closeImageModal() {
+        document.getElementById('imageModal').style.display = 'none';
+        document.getElementById('previewImageSrc').src = '';
+    }
+
+    function showUserModal(userId) {
+        const u = userMap[userId] || {
+            id: userId,
+            username: "",
+            language: "Неизвестно",
+            campaigns_count: 1,
+            total_spent: 0,
+            is_banned: false
+        };
+
+        document.getElementById('modalUserId').innerText = u.id;
+        document.getElementById('modalUserUsername').innerText = u.username ? ('@' + u.username) : '';
+        document.getElementById('modalUserLang').innerText = u.language;
+        document.getElementById('modalUserCampaigns').innerText = u.campaigns_count + ' шт.';
+        document.getElementById('modalUserSpent').innerText = u.total_spent + ' сом';
+
+        const statusEl = document.getElementById('modalUserStatus');
+        const banBtn = document.getElementById('modalBanBtn');
+        const banForm = document.getElementById('modalBanForm');
+
+        banForm.action = `/admin/users/${u.id}/toggle-ban?redirect_to=/admin/campaigns`;
+
+        if (u.is_banned) {
+            statusEl.innerHTML = '<span class="badge badge-stopped"><i class="fa-solid fa-ban"></i> Заблокирован</span>';
+            banBtn.className = 'btn btn-success';
+            banBtn.innerHTML = '<i class="fa-solid fa-unlock"></i> Разблокировать в боте';
+        } else {
+            statusEl.innerHTML = '<span class="badge badge-active"><i class="fa-solid fa-user-check"></i> Активен</span>';
+            banBtn.className = 'btn btn-danger';
+            banBtn.innerHTML = '<i class="fa-solid fa-ban"></i> Заблокировать в боте';
+        }
+
+        const modal = document.getElementById('userModal');
+        modal.style.display = 'flex';
+    }
+
+    function closeUserModal() {
+        document.getElementById('userModal').style.display = 'none';
+    }
+
+    window.onclick = function(event) {
+        const uModal = document.getElementById('userModal');
+        const iModal = document.getElementById('imageModal');
+        if (event.target === uModal) {
+            closeUserModal();
+        }
+        if (event.target === iModal) {
+            closeImageModal();
+        }
+    }
+</script>
+{% endblock %}

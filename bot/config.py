@@ -1,3 +1,4 @@
+import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 from typing import List, Union
@@ -9,6 +10,12 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     database_url: str = "sqlite+aiosqlite:///bot.db"
     admin_ids: List[int] = []
+    
+    # Web Admin Dashboard Settings
+    admin_username: str = "admin"
+    admin_password: str = "admin12345"
+    secret_key: str = "secret-super-key-poputka-admin-xyz-123"
+    port: int = 8000
 
     @field_validator('admin_ids', mode='before')
     @classmethod
@@ -33,7 +40,6 @@ class Settings(BaseSettings):
                 return v
         return v
 
-
     @field_validator('database_url', mode='before')
     @classmethod
     def parse_db_url(cls, v):
@@ -44,6 +50,22 @@ class Settings(BaseSettings):
         if v.startswith("postgresql://") and not v.startswith("postgresql+asyncpg://"):
             return v.replace("postgresql://", "postgresql+asyncpg://", 1)
         return v
+
+    @field_validator('port', mode='before')
+    @classmethod
+    def parse_port(cls, v):
+        env_port = os.getenv("PORT")
+        if env_port:
+            try:
+                return int(env_port)
+            except ValueError:
+                pass
+        if v:
+            try:
+                return int(v)
+            except ValueError:
+                pass
+        return 8000
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

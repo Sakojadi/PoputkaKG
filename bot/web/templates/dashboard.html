@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}Дашборд | Poputka Bot{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-title">
+        <h2>Обзор и Аналитика</h2>
+        <p>Статистика публикаций, доходов и аудитории в реальном времени</p>
+    </div>
+    <div>
+        <a href="/admin/broadcast" class="btn btn-primary">
+            <i class="fa-solid fa-bullhorn"></i> Отправить рассылку
+        </a>
+    </div>
+</div>
+
+<div class="stats-grid">
+    <div class="card">
+        <div class="stat-card-header">
+            <div class="stat-label">Общая выручка</div>
+            <div class="stat-icon icon-green"><i class="fa-solid fa-money-bill-wave"></i></div>
+        </div>
+        <div class="stat-value">{{ total_revenue }} сом</div>
+    </div>
+
+    <div class="card">
+        <div class="stat-card-header">
+            <div class="stat-label">Активные объявления</div>
+            <div class="stat-icon icon-blue"><i class="fa-solid fa-bolt"></i></div>
+        </div>
+        <div class="stat-value">{{ active_campaigns }}</div>
+    </div>
+
+    <div class="card">
+        <div class="stat-card-header">
+            <div class="stat-label">Всего публикаций</div>
+            <div class="stat-icon icon-purple"><i class="fa-solid fa-paper-plane"></i></div>
+        </div>
+        <div class="stat-value">{{ total_published_count }}</div>
+    </div>
+
+    <div class="card">
+        <div class="stat-card-header">
+            <div class="stat-label">Всего пользователей</div>
+            <div class="stat-icon icon-amber"><i class="fa-solid fa-users"></i></div>
+        </div>
+        <div class="stat-value">{{ total_users }}</div>
+    </div>
+</div>
+
+<div class="table-card">
+    <div class="table-header">
+        <h3>Последние заказы рекламы</h3>
+        <a href="/admin/campaigns" class="btn btn-secondary" style="font-size: 12px; padding: 6px 12px;">
+            Все объявления →
+        </a>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Пользователь</th>
+                <th>Сумма</th>
+                <th>Осталось / Всего</th>
+                <th>Интервал</th>
+                <th>Статус</th>
+                <th>Дата</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for c in recent_campaigns %}
+            <tr>
+                <td>#{{ c.id }}</td>
+                <td><code>{{ c.user_id }}</code></td>
+                <td><strong style="color: #34d399;">{{ c.price_paid }} сом</strong></td>
+                <td>{{ c.publications_left }} / {{ c.publications_total }}</td>
+                <td>{{ c.interval_minutes }} мин</td>
+                <td>
+                    {% if c.is_active and c.publications_left > 0 %}
+                    <span class="badge badge-active"><i class="fa-solid fa-circle-play"></i> Активно</span>
+                    {% elif c.publications_left <= 0 %}
+                    <span class="badge badge-completed"><i class="fa-solid fa-check"></i> Завершено</span>
+                    {% else %}
+                    <span class="badge badge-stopped"><i class="fa-solid fa-circle-stop"></i> Остановлено</span>
+                    {% endif %}
+                </td>
+                <td style="color: var(--text-secondary);">
+                    {{ c.created_at.strftime('%d.%m.%Y %H:%M') if c.created_at else '-' }}
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="7" style="text-align: center; padding: 30px; color: var(--text-muted);">
+                    Пока нет заказов рекламы.
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

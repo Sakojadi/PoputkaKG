@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Вход в панель управления | Poputka Bot</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        :root {
+            --bg-base: #0b0f19;
+            --bg-card: rgba(17, 24, 39, 0.85);
+            --border: rgba(255, 255, 255, 0.1);
+            --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            --text-primary: #f9fafb;
+            --text-secondary: #9ca3af;
+        }
+
+        * {
+            margin: 0; padding: 0; box-sizing: border-box;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-image: 
+                radial-gradient(at 20% 20%, rgba(59, 130, 246, 0.2) 0px, transparent 50%),
+                radial-gradient(at 80% 80%, rgba(139, 92, 246, 0.2) 0px, transparent 50%);
+            padding: 20px;
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 420px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 40px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+            text-align: center;
+        }
+
+        .brand-logo {
+            width: 56px;
+            height: 56px;
+            border-radius: 16px;
+            background: var(--accent-gradient);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 20px rgba(59, 130, 246, 0.4);
+        }
+
+        h2 {
+            font-size: 22px;
+            font-weight: 800;
+            margin-bottom: 8px;
+        }
+
+        p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-bottom: 28px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+
+        input {
+            width: 100%;
+            padding: 14px 16px;
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid var(--border);
+            color: #fff;
+            font-size: 15px;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        input:focus {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2);
+        }
+
+        .btn-submit {
+            width: 100%;
+            padding: 14px;
+            border-radius: 12px;
+            background: var(--accent-gradient);
+            color: #fff;
+            font-size: 15px;
+            font-weight: 700;
+            border: none;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+            transition: transform 0.2s, opacity 0.2s;
+            margin-top: 10px;
+        }
+
+        .btn-submit:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .error-msg {
+            background: rgba(244, 63, 94, 0.15);
+            border: 1px solid rgba(244, 63, 94, 0.3);
+            color: #fb7185;
+            padding: 12px;
+            border-radius: 10px;
+            font-size: 13px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="brand-logo">🚀</div>
+        <h2>Панель управления</h2>
+        <p>Войдите для доступа к статистике и управлению</p>
+
+        {% if error %}
+        <div class="error-msg">
+            <i class="fa-solid fa-circle-exclamation"></i> {{ error }}
+        </div>
+        {% endif %}
+
+        <form action="/admin/login" method="POST">
+            <div class="form-group">
+                <label>Логин администратора</label>
+                <input type="text" name="username" placeholder="admin" required autofocus>
+            </div>
+            <div class="form-group">
+                <label>Пароль</label>
+                <input type="password" name="password" placeholder="••••••••" required>
+            </div>
+            <button type="submit" class="btn-submit">
+                <i class="fa-solid fa-lock"></i> Войти в систему
+            </button>
+        </form>
+    </div>
+</body>
+</html>

@@ -11,7 +11,7 @@ from aiogram.types import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.db import AsyncSessionLocal
-from bot.database.models import Campaign
+from bot.database.models import Campaign, User
 from bot.locales.translations import get_text, TEXTS
 from bot.handlers.start import get_user_lang, main_keyboard
 from bot.services.payment import generate_xpay_link, check_xpay_payment
@@ -36,23 +36,42 @@ async def post_ad(user_id: int, campaign_id: int):
         if not campaign or not campaign.is_active or campaign.publications_left <= 0:
             return
 
+        # Check if the user is banned in bot
+        user = await session.get(User, user_id)
+        if user and getattr(user, "is_banned", False):
+            logger.warning(f"Aborting ad post for campaign {campaign_id}: User {user_id} is banned.")
+            campaign.is_active = False
+            if campaign.job_id:
+                try:
+                    scheduler.remove_job(campaign.job_id)
+                except Exception:
+                    pass
+            await session.commit()
+            return
+
         lang = await get_user_lang(user_id, session)
         total_published = campaign.publications_total
         
         bot = Bot(token=config.bot_token)
         try:
             if campaign.content_photo:
-                await bot.send_photo(
+                sent_msg = await bot.send_photo(
                     chat_id=config.group_id,
                     photo=campaign.content_photo,
                     caption=campaign.content_text or ""
                 )
             else:
-                await bot.send_message(
+                sent_msg = await bot.send_message(
                     chat_id=config.group_id,
                     text=campaign.content_text or "."
                 )
             
+            if sent_msg and hasattr(sent_msg, 'message_id'):
+                campaign.last_message_id = sent_msg.message_id
+                existing = [x.strip() for x in (campaign.message_ids or "").split(",") if x.strip()]
+                existing.append(str(sent_msg.message_id))
+                campaign.message_ids = ",".join(existing)
+
             logger.info(f"Successfully posted ad for campaign {campaign_id} to {config.group_id}")
             
             campaign.publications_left -= 1
