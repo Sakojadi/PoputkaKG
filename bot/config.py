@@ -16,6 +16,8 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             v = v.strip("[]'\" ")
             return [int(x.strip()) for x in v.split(",") if x.strip()]
+        if isinstance(v, int):
+            return [v]
         return v
 
     @field_validator('group_id', mode='before')
