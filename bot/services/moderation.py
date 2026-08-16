@@ -21,25 +21,7 @@ URL_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-MENTION_PATTERN = re.compile(r'(@[a-zA-Z0-9_]{4,})', re.IGNORECASE)
-
-BANNED_WORDS = [
-    r'секс', r'интим', r'эскорт', r'проститутк', r'шлюх', r'порно', r'член', r'минет', r'куни',
-    r'трах', r'вирт', r'эротик', r'массаж\s+с\s+окончанием', r'боди\s*массаж', r'кыздар\s+керек',
-    r'кыз\s+керек', r'жатакана', r'sex', r'intim', r'porn', r'xxx', r'escort', r'nude', r'onlyfans',
-    r'prostitut', r'shlyuh', r'kyzdar\s+kerek', r'kyz\s+kerek',
-    
-    r'\bхуй', r'\bхуе', r'\bхуя', r'\bпизд', r'\bебат', r'\bебан', r'\bебал', r'\bбля', r'\bблят',
-    r'\bсука', r'\bсучк', r'\bмудак', r'\bгандон', r'\bсике', r'\bсигейин', r'\bкоток', r'\bкотогум',
-    r'\bам\b', r'\bамын', r'\bэненди', r'\bэнеңди', r'\bжалеп', r'\bдалбан',
-    r'\bhuy', r'\bpizd', r'\bebat', r'\bblyat', r'\bsuka', r'\bkotok', r'\bsikeyin', r'\bfuck', r'\bbitch',
-    
-    r'нарко', r'меф', r'мефедрон', r'соль', r'соли', r'закладк', r'бошк', r'шишк', r'трав',
-    r'гашиш', r'спайс', r'гидра', r'hydra', r'weed', r'drugs', r'mef', r'soli', r'zakladk',
-    
-    r'1xbet', r'казино', r'casino', r'ставка', r'ставк', r'пассивный\s*доход', r'легкий\s*заработок',
-    r'stavk', r'zarabotok'
-]
+BANNED_WORDS = ['секс', 'интим', 'эскорт', 'проститутк', 'шлюх', 'порно', 'член', 'минет', 'куни', 'трах', 'вирт', 'эротик', 'массаж\\s+с\\s+окончанием', 'боди\\s*массаж', 'кыздар\\s+керек', 'кыз\\s+керек', 'жатакана', 'sex', 'intim', 'porn', 'xxx', 'escort', 'nude', 'onlyfans', 'prostitut', 'shlyuh', 'kyzdar\\s+kerek', 'kyz\\s+kerek', '\\bхуй', '\\bхуе', '\\bхуя', '\\bпизд', '\\bебат', '\\bебан', '\\bебал', '\\bбля', '\\bблят', '\\bсука', '\\bсучк', '\\bмудак', '\\bгандон', '\\bсике', '\\bсигейин', '\\bкоток', '\\bкотогум', '\\bам\\b', '\\bамын', '\\bэненди', '\\bэнеңди', '\\bжалеп', '\\bдалбан', '\\bhuy', '\\bpizd', '\\bebat', '\\bblyat', '\\bsuka', '\\bkotok', '\\bsikeyin', '\\bfuck', '\\bbitch', 'нарко', 'меф', 'мефедрон', 'соль', 'соли', 'закладк', 'бошк', 'шишк', 'трав', 'гашиш', 'спайс', 'гидра', 'hydra', 'weed', 'drugs', 'mef', 'soli', 'zakladk', '1xbet', 'казино', 'casino', 'ставка', 'ставк', 'пассивный\\s*доход', 'легкий\\s*заработок', 'stavk', 'zarabotok', 'пидор', 'пидорас', 'пидар', 'пидрила', 'педик', 'уебищ', 'уебок', 'уебан', 'уёбищ', 'уёбок', 'уёбан', '\\bхуи', 'нахуй', 'похуй', 'дохуя', 'охуел', 'охует', 'хуесос', 'хуила', 'пиздец', 'распиздяй', 'пиздобол', 'спиздил', 'пиздюк', 'пиздит', '\\bебуч', 'еблан', 'долбоеб', 'долбоёб', 'заебал', 'выебал', 'выебон', '\\bбляд', 'блядина', 'блядство', 'сучар', 'сучий', 'гондон', 'мудила', 'потаскух', 'шалав', 'мразь', 'залуп', 'дрочить', 'дрочил', 'отсоси', 'отсос\\b', 'кунилингус', 'жопа', 'сиськи', 'голая', 'голый', 'трахат', 'котокбаш', 'котогуңду', 'котогумду', 'коток\\s*же', 'сигем', 'сиктим', 'сиккен', 'сигиш', 'сигишип', 'сигишейли', '\\bсик\\b', 'сигип', 'амыңды', 'амыңа', 'амбаш', 'амды', 'энеңин', 'эненду', 'энеңдин', 'энендин', 'жалептер', 'далбаеб', 'далбайоб', 'далбич', 'көтүңдү', 'көтүңө', 'көтүн\\b', 'көтүнө', 'көтүң\\b', 'котуң', 'котуно', 'эмчек', 'түндө\\s+кыз', 'тундо\\s+кыз', 'акчага\\s+кыз', 'pidor', 'pidoras', 'pidar', 'pidrila', 'pedik', 'uebish', 'uebok', 'ueban', 'uyobish', 'hui', 'hye', 'nahuy', 'pohuy', 'ohuet', 'huila', 'huesos', 'pizdec', 'pizdetz', 'pizdyuk', 'spizdil', 'eban', 'eblan', 'dolboeb', 'dalbaeb', 'zaebal', 'blyad', 'blad', 'blyadina', 'blyadstvo', 'suchka', 'gandon', 'gondon', 'mudak', 'mudila', 'zalupa', 'mraz', 'kotogum', 'kotokbash', 'sikem', 'siktin', 'sigish', 'sikken', 'amyn', 'amyndy', 'enengdi', 'fucking', 'cunt', 'dick\\b', 'pussy', 'asshole', 'whore', 'slut', 'cock\\b', 'травка', 'героин', 'кокаин', 'амфетамин', 'экстази', 'spice', 'hashish', 'gashish']
 
 BANNED_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern in BANNED_WORDS]
 
@@ -53,9 +35,6 @@ def moderate_text(text: str) -> Tuple[bool, str]:
             u_lower = url.lower()
             if not any(allowed in u_lower for allowed in ["wa.me", "whatsapp.com", "t.me", "telegram.me", "tg://"]):
                 return False, "links_not_allowed"
-
-    # Allow @mentions for contacts
-    pass
 
     for pattern in BANNED_PATTERNS:
         if pattern.search(text):
