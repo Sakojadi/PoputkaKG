@@ -60,6 +60,40 @@ def remove_campaign_job(campaign) -> None:
             logger.exception("Failed to remove scheduler job %s", job_id)
 
 
+def group_post_job_id_for(post_id: int) -> str:
+    """Deterministic job id, so a group post can never own more than one job."""
+    return f"group_post_{post_id}"
+
+
+def schedule_group_post(post) -> str:
+    """Create (or replace) the recurring job for a repeating group post."""
+    from bot.services.group_posts import post_group_message
+
+    job_id = group_post_job_id_for(post.id)
+    scheduler.add_job(
+        post_group_message,
+        "interval",
+        minutes=post.interval_minutes,
+        args=[post.id],
+        id=job_id,
+        replace_existing=True,
+    )
+    return job_id
+
+
+def remove_group_post_job(post) -> None:
+    """Remove a group post's job, including one created under an earlier id."""
+    for job_id in {group_post_job_id_for(post.id), getattr(post, "job_id", None)}:
+        if not job_id:
+            continue
+        try:
+            scheduler.remove_job(job_id)
+        except JobLookupError:
+            pass
+        except Exception:
+            logger.exception("Failed to remove scheduler job %s", job_id)
+
+
 def start_scheduler():
     scheduler.start()
 
@@ -72,7 +106,7 @@ async def sync_jobs_with_db() -> None:
     a failed removal, or the old random-job-id scheme, and is dropped here.
     """
     from bot.database.db import AsyncSessionLocal
-    from bot.database.models import Campaign
+    from bot.database.models import Campaign, GroupPost
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -82,7 +116,16 @@ async def sync_jobs_with_db() -> None:
         )
         active = {c.id: c for c in result.scalars().all()}
 
-        wanted = {job_id_for(cid) for cid in active}
+        gp_result = await session.execute(
+            select(GroupPost).where(
+                GroupPost.is_active.is_(True), GroupPost.repeats_left > 0
+            )
+        )
+        active_posts = {p.id: p for p in gp_result.scalars().all()}
+
+        wanted = {job_id_for(cid) for cid in active} | {
+            group_post_job_id_for(pid) for pid in active_posts
+        }
         existing = {job.id for job in scheduler.get_jobs()}
 
         removed = 0
@@ -104,12 +147,21 @@ async def sync_jobs_with_db() -> None:
             if campaign.job_id != job_id:
                 campaign.job_id = job_id
 
+        for post in active_posts.values():
+            job_id = group_post_job_id_for(post.id)
+            if job_id not in existing:
+                schedule_group_post(post)
+                added += 1
+            if post.job_id != job_id:
+                post.job_id = job_id
+
         await session.commit()
 
     logger.info(
-        "Scheduler reconciled: %s active campaigns, %s orphaned jobs dropped, "
-        "%s jobs restored.",
+        "Scheduler reconciled: %s active campaigns, %s active group posts, "
+        "%s orphaned jobs dropped, %s jobs restored.",
         len(active),
+        len(active_posts),
         removed,
         added,
     )

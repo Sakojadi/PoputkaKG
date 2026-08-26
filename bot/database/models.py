@@ -48,3 +48,20 @@ class AppSetting(Base):
 
     key = Column(String, primary_key=True)
     value = Column(String)
+
+
+class GroupPost(Base):
+    __tablename__ = "group_posts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    text = Column(Text)
+    buttons = Column(Text, default="[]")
+    repeats_total = Column(Integer)
+    repeats_left = Column(Integer)
+    interval_minutes = Column(Integer)
+    is_active = Column(Boolean, default=True)
+    job_id = Column(String, nullable=True)
+    failure_count = Column(Integer, default=0)
+    last_message_id = Column(BigInteger, nullable=True)
+    message_ids = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)

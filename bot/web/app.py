@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import logging
 import math
 import os
@@ -8,7 +9,6 @@ import urllib.parse
 from datetime import UTC, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -17,10 +17,16 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from bot.config import config
 from bot.database.db import AsyncSessionLocal
-from bot.database.models import Campaign, User
+from bot.database.models import Campaign, GroupPost, User
 from bot.handlers.ad_flow import _spawn
+from bot.services.group_posts import build_group_post_markup
 from bot.services.moderation import BANNED_WORDS
-from bot.services.scheduler import remove_campaign_job, schedule_campaign
+from bot.services.scheduler import (
+    remove_campaign_job,
+    remove_group_post_job,
+    schedule_campaign,
+    schedule_group_post,
+)
 from bot.services.settings_store import get_price_per_ad, get_setting, set_setting
 from bot.services.tg import get_bot
 
@@ -753,6 +759,10 @@ async def delete_user_from_db(
 
 
 # --- BROADCAST & PROMO ---
+GROUP_POST_ALLOWED_INTERVALS = {5, 15, 30, 60, 180, 720, 1440}
+MAX_GROUP_POST_REPEATS = 100
+
+
 @app.get("/admin/broadcast", response_class=HTMLResponse)
 async def broadcast_page(
     request: Request, msg: str | None = None, _=Depends(require_admin)
@@ -760,6 +770,13 @@ async def broadcast_page(
     async with AsyncSessionLocal() as session:
         res = await session.execute(select(func.count(User.id)))
         total_users = res.scalar() or 0
+
+        gp_res = await session.execute(
+            select(GroupPost)
+            .where(GroupPost.is_active.is_(True))
+            .order_by(desc(GroupPost.id))
+        )
+        active_group_posts = gp_res.scalars().all()
 
     bot_username = ""
     bot = get_bot()
@@ -776,6 +793,7 @@ async def broadcast_page(
             "active_page": "broadcast",
             "total_users": total_users,
             "bot_username": bot_username,
+            "active_group_posts": active_group_posts,
             "msg": msg,
         },
     )
@@ -794,26 +812,85 @@ async def broadcast_custom_group_post(request: Request, _=Depends(require_admin)
             status_code=302,
         )
 
+    try:
+        repeats_total = int(form_data.get("repeats_total", "1"))
+    except ValueError:
+        repeats_total = 1
+    try:
+        interval_minutes = int(form_data.get("interval_minutes", "60"))
+    except ValueError:
+        interval_minutes = 60
+
+    if not (1 <= repeats_total <= MAX_GROUP_POST_REPEATS):
+        return RedirectResponse(
+            url="/admin/broadcast?msg=Некорректное+количество+повторов",
+            status_code=302,
+        )
+    if repeats_total > 1 and interval_minutes not in GROUP_POST_ALLOWED_INTERVALS:
+        return RedirectResponse(
+            url="/admin/broadcast?msg=Некорректный+интервал+повторов",
+            status_code=302,
+        )
+
     buttons = []
     for t, u in zip(btn_texts, btn_urls):
         t_clean = str(t).strip()
         u_clean = str(u).strip()
         if t_clean and u_clean:
-            buttons.append([InlineKeyboardButton(text=t_clean, url=u_clean)])
+            buttons.append({"text": t_clean, "url": u_clean})
             if len(buttons) >= 5:
                 break
 
-    markup = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+    markup = build_group_post_markup(json.dumps(buttons))
 
     bot = get_bot()
     try:
         await bot.send_message(chat_id=config.group_id, text=text, reply_markup=markup)
-        msg = f"Пост+с+{len(buttons)}+кнопками+успешно+опубликован+в+группу!"
     except Exception as e:
         logger.error(f"Failed to post custom message to group: {e}")
         msg = f"Ошибка+отправки:+{e}"
+        return RedirectResponse(url=f"/admin/broadcast?msg={msg}", status_code=302)
+
+    repeats_left = repeats_total - 1
+    async with AsyncSessionLocal() as session:
+        post = GroupPost(
+            text=text,
+            buttons=json.dumps(buttons),
+            repeats_total=repeats_total,
+            repeats_left=repeats_left,
+            interval_minutes=interval_minutes,
+            is_active=repeats_left > 0,
+        )
+        session.add(post)
+        await session.commit()
+
+        if repeats_left > 0:
+            post.job_id = schedule_group_post(post)
+            await session.commit()
+
+    if repeats_left > 0:
+        msg = (
+            f"Пост+с+{len(buttons)}+кнопками+опубликован!+"
+            f"Запланировано+еще+{repeats_left}+повтор(ов)+каждые+{interval_minutes}+мин."
+        )
+    else:
+        msg = f"Пост+с+{len(buttons)}+кнопками+успешно+опубликован+в+группу!"
 
     return RedirectResponse(url=f"/admin/broadcast?msg={msg}", status_code=302)
+
+
+@app.post("/admin/broadcast/group-post/{post_id}/stop")
+async def stop_group_post(post_id: int, _=Depends(require_admin)):
+    async with AsyncSessionLocal() as session:
+        post = await session.get(GroupPost, post_id)
+        if post and post.is_active:
+            post.is_active = False
+            remove_group_post_job(post)
+            await session.commit()
+
+    return RedirectResponse(
+        url="/admin/broadcast?msg=Повторяющийся+пост+остановлен", status_code=302
+    )
 
 
 @app.post("/admin/broadcast/users")
