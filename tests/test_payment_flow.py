@@ -1,12 +1,17 @@
+import httpx
 import pytest
+import respx
 from aiogram import Dispatcher
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from bot.database.db import AsyncSessionLocal
-from bot.database.models import Payment
-from bot.handlers.ad_flow import AdFlow
+from bot.database.models import Payment, User
+from bot.handlers.ad_flow import AdFlow, confirm_payment
 from bot.services import fsm
+
+BASE = "https://devapi.xpay.kg"
+LOGIN = f"{BASE}/api/v1/developer/login"
 
 
 async def test_payment_row_round_trips(db):
@@ -93,3 +98,94 @@ async def test_context_is_keyed_per_user():
         assert await fsm.get_fsm_context(222).get_state() is None
     finally:
         fsm._dispatcher = None
+
+
+async def _seed_payment(qr_id="tx-1", status="WAITING", user_id=555):
+    async with AsyncSessionLocal() as session:
+        session.add(User(id=user_id, language="ru"))
+        payment = Payment(
+            user_id=user_id, qr_transaction_id=qr_id, amount=100.0, status=status
+        )
+        session.add(payment)
+        await session.commit()
+        return payment.id
+
+
+def _mock_xpay(pay_status):
+    """Mock login + one dynamic-status response."""
+    from tests.test_xpay import login_body, status_body, status_url
+
+    respx.post(LOGIN).mock(return_value=httpx.Response(200, json=login_body()))
+    return respx.get(status_url("tx-1")).mock(
+        return_value=httpx.Response(200, json=status_body(pay_status))
+    )
+
+
+@respx.mock
+async def test_confirm_returns_false_and_records_status_when_unpaid(db, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        "bot.handlers.ad_flow._notify_paid", lambda uid, lang: sent.append(uid)
+    )
+    payment_id = await _seed_payment()
+    _mock_xpay("WAITING")
+
+    assert await confirm_payment(payment_id) is False
+
+    async with AsyncSessionLocal() as session:
+        assert (await session.get(Payment, payment_id)).status == "WAITING"
+    assert sent == [], "no confirmation message may be sent before payment lands"
+
+
+@respx.mock
+async def test_confirm_marks_paid_and_advances_state(db, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        "bot.handlers.ad_flow._notify_paid",
+        lambda uid, lang: sent.append(uid),
+    )
+    dp = Dispatcher()
+    fsm.set_dispatcher(dp)
+    try:
+        payment_id = await _seed_payment()
+        _mock_xpay("COMPLETED")
+
+        assert await confirm_payment(payment_id) is True
+
+        async with AsyncSessionLocal() as session:
+            assert (await session.get(Payment, payment_id)).status == "COMPLETED"
+        assert await fsm.get_fsm_context(555).get_state() == AdFlow.content.state
+        assert sent == [555]
+    finally:
+        fsm._dispatcher = None
+
+
+@respx.mock
+async def test_confirm_is_idempotent(db, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        "bot.handlers.ad_flow._notify_paid", lambda uid, lang: sent.append(uid)
+    )
+    payment_id = await _seed_payment(status="COMPLETED")
+    route = _mock_xpay("COMPLETED")
+
+    assert await confirm_payment(payment_id) is True
+
+    assert route.call_count == 0, "an already-completed payment needs no API call"
+    assert sent == [], "the confirmation message must not be sent twice"
+
+
+@respx.mock
+async def test_confirm_returns_false_when_xpay_is_unreachable(db, monkeypatch):
+    monkeypatch.setattr("bot.handlers.ad_flow._notify_paid", lambda uid, lang: None)
+    payment_id = await _seed_payment()
+    respx.post(LOGIN).mock(side_effect=httpx.ConnectError("down"))
+
+    assert await confirm_payment(payment_id) is False
+
+    async with AsyncSessionLocal() as session:
+        assert (await session.get(Payment, payment_id)).status == "WAITING"
+
+
+async def test_confirm_returns_false_for_unknown_payment(db):
+    assert await confirm_payment(999_999) is False

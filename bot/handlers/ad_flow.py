@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import UTC, datetime
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -13,14 +14,15 @@ from aiogram.types import (
 
 from bot.config import config
 from bot.database.db import AsyncSessionLocal
-from bot.database.models import Campaign, User
+from bot.database.models import Campaign, Payment, User
 from bot.handlers.start import get_user_lang, main_keyboard
 from bot.locales.translations import TEXTS, get_text
+from bot.services.fsm import get_fsm_context
 from bot.services.moderation import moderate_full_content
-from bot.services.payment import check_xpay_payment, generate_xpay_link
 from bot.services.scheduler import remove_campaign_job, schedule_campaign
 from bot.services.settings_store import get_price_per_ad
 from bot.services.tg import get_bot
+from bot.services.xpay import XPayError, create_payment, get_payment_status
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -370,6 +372,63 @@ async def process_cancel_payment(callback: CallbackQuery, state: FSMContext):
     )
 
 
+def _notify_paid(user_id: int, lang: str) -> None:
+    """Send the payment-confirmed message without blocking the caller.
+
+    Split out so tests can replace it, and so a webhook is not held open
+    waiting on the Telegram API.
+    """
+    _spawn(get_bot().send_message(user_id, get_text(lang, "payment_confirmed")))
+
+
+async def confirm_payment(payment_id: int) -> bool:
+    """Settle one payment. Shared by the check button and the xPay webhook.
+
+    The webhook payload is unsigned, so it is only ever a trigger: the xPay
+    status endpoint is the sole authority on whether money arrived.
+    Idempotent, so duplicate deliveries and button/webhook races are safe.
+    """
+    async with AsyncSessionLocal() as session:
+        payment = await session.get(Payment, payment_id)
+        if payment is None:
+            return False
+        if payment.status == "COMPLETED":
+            return True
+        qr_transaction_id = payment.qr_transaction_id
+        user_id = payment.user_id
+
+    try:
+        pay_status = await get_payment_status(qr_transaction_id)
+    except XPayError as e:
+        logger.warning(f"xPay status check failed for {qr_transaction_id}: {e}")
+        return False
+
+    async with AsyncSessionLocal() as session:
+        payment = await session.get(Payment, payment_id)
+        if payment is None:
+            return False
+        if payment.status == "COMPLETED":
+            # A concurrent caller (button vs webhook) already settled it.
+            return True
+
+        payment.status = pay_status
+        payment.updated_at = datetime.now(UTC)
+        await session.commit()
+
+        if pay_status != "COMPLETED":
+            return False
+
+        lang = await get_user_lang(user_id, session)
+
+    state = get_fsm_context(user_id)
+    if state is not None:
+        await state.set_state(AdFlow.content)
+
+    _notify_paid(user_id, lang)
+    logger.info(f"Payment {payment_id} confirmed for user {user_id}")
+    return True
+
+
 @router.callback_query(AdFlow.confirm_payment, F.data == "pay_yes")
 async def process_payment(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -377,10 +436,27 @@ async def process_payment(callback: CallbackQuery, state: FSMContext):
     lang = data.get("lang", "ky")
     price = count * await get_price_per_ad()
 
-    link, payment_id = await generate_xpay_link(price)
-    await state.update_data(payment_id=payment_id, price=price)
+    try:
+        qr = await create_payment(callback.from_user.id, price)
+    except XPayError as e:
+        logger.error(f"Failed to create xPay payment for {callback.from_user.id}: {e}")
+        await callback.answer(get_text(lang, "payment_not_found"), show_alert=True)
+        return
 
-    msg_text = get_text(lang, "payment_info", price=price, link=link)
+    async with AsyncSessionLocal() as session:
+        payment = Payment(
+            user_id=callback.from_user.id,
+            qr_transaction_id=qr.qr_transaction_id,
+            amount=price,
+            status="WAITING",
+        )
+        session.add(payment)
+        await session.commit()
+        payment_db_id = payment.id
+
+    await state.update_data(payment_db_id=payment_db_id, price=price)
+
+    msg_text = get_text(lang, "payment_info", price=price, link=qr.qr_code)
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -391,7 +467,16 @@ async def process_payment(callback: CallbackQuery, state: FSMContext):
         ]
     )
 
-    await callback.message.edit_text(msg_text, reply_markup=markup)
+    # The summary message is a plain text message, so it cannot be edited
+    # into a photo; delete it and send the QR image instead.
+    await callback.message.delete()
+    if qr.qr_image:
+        await callback.message.answer_photo(
+            qr.qr_image, caption=msg_text, reply_markup=markup
+        )
+    else:
+        await callback.message.answer(msg_text, reply_markup=markup)
+
     await state.set_state(AdFlow.waiting_payment)
 
 
@@ -399,16 +484,14 @@ async def process_payment(callback: CallbackQuery, state: FSMContext):
 async def check_payment_cb(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     lang = data.get("lang", "ky")
-    payment_id = data["payment_id"]
+    payment_db_id = data.get("payment_db_id")
 
-    is_paid = await check_xpay_payment(payment_id)
-    if not is_paid:
+    if payment_db_id is None or not await confirm_payment(payment_db_id):
         await callback.answer(get_text(lang, "payment_not_found"), show_alert=True)
         return
 
+    # confirm_payment already set the state and sent payment_confirmed.
     await callback.message.delete()
-    await callback.message.answer(get_text(lang, "payment_confirmed"))
-    await state.set_state(AdFlow.content)
 
 
 @router.message(AdFlow.content)
@@ -496,6 +579,14 @@ async def process_content_ok(callback: CallbackQuery, state: FSMContext):
         )
         session.add(campaign)
         await session.commit()
+
+        payment_db_id = data.get("payment_db_id")
+        if payment_db_id:
+            payment = await session.get(Payment, payment_db_id)
+            if payment:
+                payment.campaign_id = campaign.id
+                payment.updated_at = datetime.now(UTC)
+                await session.commit()
 
         campaign.job_id = schedule_campaign(campaign)
         session.add(campaign)
