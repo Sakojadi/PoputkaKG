@@ -1412,8 +1412,34 @@
                 sync();
             }
 
+            // Shared key builder so the save (initPageUI) and restore (SPA nav script) agree on the format.
+            window.__filterStoreKey = function(pathname) {
+                return 'poputka:filters:' + pathname;
+            };
+
             // Re-runs after every SPA swap: everything here is idempotent.
             window.initPageUI = function() {
+                // --- Persist list filters (campaigns/users) across navigation & reload ---
+                // Runs on every call (not data-bound: the URL is the current truth, so we just re-save it).
+                (function() {
+                    const path = window.location.pathname;
+                    if (path !== '/admin/campaigns' && path !== '/admin/users') return;
+                    // If the URL is bare but a filter set is stored, a restore navigation
+                    // (see the SPA nav script) is about to replace this URL with it — don't
+                    // clobber the stored value with this transient pre-restore state.
+                    if (!window.location.search) {
+                        try {
+                            if (localStorage.getItem(window.__filterStoreKey(path))) return;
+                        } catch (e) {}
+                    }
+                    const params = new URLSearchParams(window.location.search);
+                    params.delete('msg');
+                    params.delete('page');
+                    try {
+                        localStorage.setItem(window.__filterStoreKey(path), params.toString());
+                    } catch (e) { /* Safari private mode etc. */ }
+                })();
+
                 // --- Dismissible alerts, auto-fading after a few seconds ---
                 document.querySelectorAll('.alert:not([data-bound])').forEach(alert => {
                     alert.setAttribute('data-bound', '1');
@@ -1522,6 +1548,19 @@
             const bar = document.getElementById('spaProgressBar');
             const main = document.querySelector('.main-wrapper');
 
+            // --- Restore persisted filters on a full page load (no flash: single SPA swap before paint interaction) ---
+            // Runs exactly once, when this script first executes, so it can never loop on popstate.
+            (function restoreFiltersOnLoad() {
+                const path = window.location.pathname;
+                if (path !== '/admin/campaigns' && path !== '/admin/users') return;
+                if (window.location.search) return;
+                let stored = null;
+                try { stored = localStorage.getItem(window.__filterStoreKey(path)); } catch (e) {}
+                if (stored) {
+                    navigateTo(path + '?' + stored, true);
+                }
+            })();
+
             // Any open sheet/lightbox belongs to the page we are leaving
             function closeAnyModal() {
                 document.querySelectorAll('.modal-backdrop.open').forEach(m => m.classList.remove('open'));
@@ -1628,7 +1667,22 @@
                     !e.ctrlKey && !e.metaKey && !e.shiftKey
                 ) {
                     e.preventDefault();
-                    navigateTo(link.href, true);
+
+                    const url = new URL(link.href, window.location.origin);
+                    let target = link.href;
+
+                    if (link.hasAttribute('data-reset-filters')) {
+                        try { localStorage.removeItem(window.__filterStoreKey(url.pathname)); } catch (err) {}
+                    } else if (
+                        (url.pathname === '/admin/campaigns' || url.pathname === '/admin/users') &&
+                        !url.search
+                    ) {
+                        let stored = null;
+                        try { stored = localStorage.getItem(window.__filterStoreKey(url.pathname)); } catch (err) {}
+                        if (stored) target = url.pathname + '?' + stored;
+                    }
+
+                    navigateTo(target, true);
                 }
             });
 

@@ -152,7 +152,7 @@
         {% if sort != 'new' %}
         <a href="{{ url_without('sort') }}" class="pill"><i class="fa-solid fa-xmark"></i> Своя сортировка</a>
         {% endif %}
-        <a href="/admin/campaigns" class="pill pill-reset"><i class="fa-solid fa-rotate-left"></i> Сбросить всё</a>
+        <a href="/admin/campaigns" class="pill pill-reset" data-reset-filters><i class="fa-solid fa-rotate-left"></i> Сбросить всё</a>
     </div>
     {% endif %}
 
@@ -282,7 +282,7 @@
                             <p>
                                 {% if q or active_filters %}
                                 Под выбранные фильтры ничего не подошло.<br>
-                                <a href="/admin/campaigns" style="color: #60a5fa;">Сбросить фильтры</a>
+                                <a href="/admin/campaigns" style="color: #60a5fa;" data-reset-filters>Сбросить фильтры</a>
                                 {% else %}
                                 Объявлений пока нет.
                                 {% endif %}
