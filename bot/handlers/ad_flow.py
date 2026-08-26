@@ -412,7 +412,10 @@ async def confirm_payment(payment_id: int) -> bool:
             return True
 
         payment.status = pay_status
-        payment.updated_at = datetime.now(UTC)
+        # payments.updated_at is naive UTC, matching every other timestamp in
+        # this schema and what the admin panel's format_local() assumes; strip
+        # tzinfo rather than storing an aware value.
+        payment.updated_at = datetime.now(UTC).replace(tzinfo=None)
         await session.commit()
 
         if pay_status != "COMPLETED":
@@ -585,7 +588,7 @@ async def process_content_ok(callback: CallbackQuery, state: FSMContext):
             payment = await session.get(Payment, payment_db_id)
             if payment:
                 payment.campaign_id = campaign.id
-                payment.updated_at = datetime.now(UTC)
+                payment.updated_at = datetime.now(UTC).replace(tzinfo=None)
                 await session.commit()
 
         campaign.job_id = schedule_campaign(campaign)
