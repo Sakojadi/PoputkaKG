@@ -19,6 +19,7 @@ from bot.locales.translations import TEXTS, get_text
 from bot.services.moderation import moderate_full_content
 from bot.services.payment import check_xpay_payment, generate_xpay_link
 from bot.services.scheduler import remove_campaign_job, schedule_campaign
+from bot.services.settings_store import get_price_per_ad
 from bot.services.tg import get_bot
 
 logger = logging.getLogger(__name__)
@@ -201,7 +202,8 @@ async def back_from_count(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.delete()
     await callback.message.answer(
-        get_text(lang, "welcome"), reply_markup=main_keyboard(lang)
+        get_text(lang, "welcome", price_per_ad=await get_price_per_ad()),
+        reply_markup=main_keyboard(lang),
     )
 
 
@@ -284,9 +286,13 @@ async def process_interval(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     count = data["count"]
     lang = data.get("lang", "ky")
-    price = count * 1.0
+    price_per_ad = await get_price_per_ad()
+    price = count * price_per_ad
 
-    summary = get_text(lang, "summary", count=count, interval=interval, price=price)
+    summary = get_text(
+        lang, "summary", count=count, interval=interval, price=price,
+        price_per_ad=price_per_ad,
+    )
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -359,7 +365,8 @@ async def process_cancel_payment(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.delete()
     await callback.message.answer(
-        get_text(lang, "welcome"), reply_markup=main_keyboard(lang)
+        get_text(lang, "welcome", price_per_ad=await get_price_per_ad()),
+        reply_markup=main_keyboard(lang),
     )
 
 
@@ -368,7 +375,7 @@ async def process_payment(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     count = data["count"]
     lang = data.get("lang", "ky")
-    price = count * 1.0
+    price = count * await get_price_per_ad()
 
     link, payment_id = await generate_xpay_link(price)
     await state.update_data(payment_id=payment_id)

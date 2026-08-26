@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.database.db import AsyncSessionLocal
 from bot.database.models import User
 from bot.locales.translations import TEXTS, get_text
+from bot.services.settings_store import get_price_per_ad
 
 router = Router()
 
@@ -47,9 +48,10 @@ def main_keyboard(lang: str) -> ReplyKeyboardMarkup:
 async def cmd_start(message: Message):
     async with AsyncSessionLocal() as session:
         lang = await get_user_lang(message.from_user.id, session)
-        await message.answer(
-            get_text(lang, "welcome"), reply_markup=main_keyboard(lang)
-        )
+    await message.answer(
+        get_text(lang, "welcome", price_per_ad=await get_price_per_ad()),
+        reply_markup=main_keyboard(lang),
+    )
 
 
 # Helper list of all language button texts across all languages
@@ -90,7 +92,8 @@ async def process_lang_change(callback: CallbackQuery):
 
     await callback.message.delete()
     await callback.message.answer(
-        get_text(new_lang, "welcome"), reply_markup=main_keyboard(new_lang)
+        get_text(new_lang, "welcome", price_per_ad=await get_price_per_ad()),
+        reply_markup=main_keyboard(new_lang),
     )
     await callback.answer(get_text(new_lang, "lang_changed"))
 
@@ -100,7 +103,9 @@ async def process_lang_change(callback: CallbackQuery):
 async def cmd_help(message: Message):
     async with AsyncSessionLocal() as session:
         lang = await get_user_lang(message.from_user.id, session)
-    await message.answer(get_text(lang, "help_text"))
+    await message.answer(
+        get_text(lang, "help_text", price_per_ad=await get_price_per_ad())
+    )
 
 
 @router.message(F.text.in_(PRICE_BUTTON_TEXTS))
@@ -108,4 +113,6 @@ async def cmd_help(message: Message):
 async def cmd_price(message: Message):
     async with AsyncSessionLocal() as session:
         lang = await get_user_lang(message.from_user.id, session)
-    await message.answer(get_text(lang, "price_text"))
+    await message.answer(
+        get_text(lang, "price_text", price_per_ad=await get_price_per_ad())
+    )

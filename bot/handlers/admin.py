@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from bot.config import config
 from bot.database.db import AsyncSessionLocal
 from bot.database.models import Campaign, User
+from bot.services.settings_store import get_price_per_ad
 
 router = Router()
 
@@ -34,11 +35,12 @@ async def cmd_admin(message: Message):
         )
         total_campaigns = total_c_result.scalar() or 0
 
-        # Calculate revenue (1 som per publication)
+        # Calculate revenue (price per publication comes from the settings store)
         rev_result = await session.execute(
             select(func.sum(Campaign.publications_total))
         )
-        total_revenue = rev_result.scalar() or 0
+        total_publications = rev_result.scalar() or 0
+        total_revenue = total_publications * await get_price_per_ad()
 
     report = (
         f"📊 <b>Admin Dashboard</b>\n\n"

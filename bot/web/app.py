@@ -1,7 +1,9 @@
 import asyncio
+import hashlib
 import logging
 import math
 import os
+import secrets
 import urllib.parse
 from datetime import UTC, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -19,6 +21,7 @@ from bot.database.models import Campaign, User
 from bot.handlers.ad_flow import _spawn
 from bot.services.moderation import BANNED_WORDS
 from bot.services.scheduler import remove_campaign_job, schedule_campaign
+from bot.services.settings_store import get_price_per_ad, get_setting, set_setting
 from bot.services.tg import get_bot
 
 logger = logging.getLogger(__name__)
@@ -108,6 +111,15 @@ async def get_telegram_photo(file_id: str, _=Depends(require_admin)):
 
 
 # --- AUTH ROUTES ---
+PBKDF2_ITERATIONS = 260_000
+
+
+def _hash_password(password: str, salt: bytes) -> str:
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode(), salt, PBKDF2_ITERATIONS
+    ).hex()
+
+
 @app.get("/admin/login", response_class=HTMLResponse)
 async def login_page(request: Request, error: str | None = None):
     if request.session.get("admin_logged_in"):
@@ -121,7 +133,19 @@ async def login_page(request: Request, error: str | None = None):
 async def login_action(
     request: Request, username: str = Form(...), password: str = Form(...)
 ):
-    if username == config.admin_username and password == config.admin_password:
+    password_ok = False
+    if username == config.admin_username:
+        stored_hash = await get_setting("admin_password_hash")
+        stored_salt = await get_setting("admin_password_salt")
+        if stored_hash and stored_salt:
+            candidate = _hash_password(password, bytes.fromhex(stored_salt))
+            password_ok = secrets.compare_digest(candidate, stored_hash)
+        else:
+            # No password has been saved through the panel yet -- fall back to
+            # the plaintext value from .env so the current password keeps working.
+            password_ok = secrets.compare_digest(password, config.admin_password)
+
+    if password_ok:
         request.session["admin_logged_in"] = True
         return RedirectResponse(url="/admin", status_code=status.HTTP_302_FOUND)
 
@@ -140,15 +164,17 @@ async def logout(request: Request):
 
 
 # --- SHARED FILTER HELPERS ---
-# Older rows may have price_paid == 0 / NULL; fall back to 1 som per publication
-# so revenue figures match what is shown per-row elsewhere in the panel.
-SPENT_EXPR = case(
-    (
-        or_(Campaign.price_paid.is_(None), Campaign.price_paid == 0),
-        func.coalesce(Campaign.publications_total, 0) * 1.0,
-    ),
-    else_=Campaign.price_paid,
-)
+# Older rows may have price_paid == 0 / NULL; fall back to the configured
+# price per publication so revenue figures match what is shown per-row
+# elsewhere in the panel.
+def spent_expr(price: float):
+    return case(
+        (
+            or_(Campaign.price_paid.is_(None), Campaign.price_paid == 0),
+            func.coalesce(Campaign.publications_total, 0) * price,
+        ),
+        else_=Campaign.price_paid,
+    )
 
 PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90}
 
@@ -190,10 +216,11 @@ def _filter_qs(**params) -> str:
 # --- DASHBOARD ---
 @app.get("/admin", response_class=HTMLResponse)
 async def dashboard(request: Request, _=Depends(require_admin)):
+    price = await get_price_per_ad()
     async with AsyncSessionLocal() as session:
         # Total revenue (per-row fallback for legacy rows without price_paid)
         rev_res = await session.execute(
-            select(func.coalesce(func.sum(SPENT_EXPR), 0.0))
+            select(func.coalesce(func.sum(spent_expr(price)), 0.0))
         )
         total_revenue = float(rev_res.scalar() or 0.0)
 
@@ -294,6 +321,7 @@ async def campaigns_page(
         "total_desc": desc(Campaign.publications_total),
     }.get(sort, desc(Campaign.id))
 
+    price = await get_price_per_ad()
     async with AsyncSessionLocal() as session:
         base_query = select(Campaign)
         count_query = select(func.count(Campaign.id))
@@ -315,7 +343,7 @@ async def campaigns_page(
 
         # Summary of the whole filtered set (not just the current page)
         sum_query = select(
-            func.coalesce(func.sum(SPENT_EXPR), 0.0),
+            func.coalesce(func.sum(spent_expr(price)), 0.0),
             func.coalesce(func.sum(Campaign.publications_left), 0),
         )
         for f in filters:
@@ -331,7 +359,7 @@ async def campaigns_page(
                 select(
                     Campaign.user_id,
                     func.count(Campaign.id),
-                    func.coalesce(func.sum(SPENT_EXPR), 0.0),
+                    func.coalesce(func.sum(spent_expr(price)), 0.0),
                 )
                 .where(Campaign.user_id.in_(user_ids))
                 .group_by(Campaign.user_id)
@@ -507,12 +535,14 @@ async def users_page(
     msg: str | None = None,
     _=Depends(require_admin),
 ):
+    price = await get_price_per_ad()
+
     # Per-user campaign aggregates, computed in one grouped subquery
     agg = (
         select(
             Campaign.user_id.label("uid"),
             func.count(Campaign.id).label("c_count"),
-            func.coalesce(func.sum(SPENT_EXPR), 0.0).label("spent"),
+            func.coalesce(func.sum(spent_expr(price)), 0.0).label("spent"),
         )
         .group_by(Campaign.user_id)
         .subquery()
@@ -817,18 +847,25 @@ async def broadcast_users(
 
 
 # --- SETTINGS ---
+MAX_PRICE_PER_AD = 100_000
+
+
 @app.get("/admin/settings", response_class=HTMLResponse)
 async def settings_page(
-    request: Request, msg: str | None = None, _=Depends(require_admin)
+    request: Request,
+    msg: str | None = None,
+    err: str | None = None,
+    _=Depends(require_admin),
 ):
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
         context={
             "active_page": "settings",
-            "price_per_ad": 1.0,
+            "price_per_ad": await get_price_per_ad(),
             "banned_words_count": len(BANNED_WORDS),
             "msg": msg,
+            "err": err,
         },
     )
 
@@ -839,8 +876,19 @@ async def settings_general_action(
     new_password: str | None = Form(None),
     _=Depends(require_admin),
 ):
+    if price_per_ad <= 0 or price_per_ad > MAX_PRICE_PER_AD:
+        return RedirectResponse(
+            url="/admin/settings?err=Некорректная+цена+публикации",
+            status_code=302,
+        )
+
+    await set_setting("price_per_ad", str(price_per_ad))
+
     if new_password and new_password.strip():
-        config.admin_password = new_password.strip()
+        salt = secrets.token_bytes(16)
+        password_hash = _hash_password(new_password.strip(), salt)
+        await set_setting("admin_password_salt", salt.hex())
+        await set_setting("admin_password_hash", password_hash)
 
     return RedirectResponse(
         url="/admin/settings?msg=Настройки+успешно+сохранены!", status_code=302

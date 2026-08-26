@@ -16,6 +16,12 @@
 </div>
 {% endif %}
 
+{% if err %}
+<div class="alert alert-error">
+    <i class="fa-solid fa-circle-exclamation"></i> {{ err }}
+</div>
+{% endif %}
+
 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 20px;">
     <!-- Price & Admin Password -->
     <div class="card">
