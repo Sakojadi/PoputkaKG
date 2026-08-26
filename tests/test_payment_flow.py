@@ -148,6 +148,7 @@ async def test_confirm_marks_paid_and_advances_state(db, monkeypatch):
     fsm.set_dispatcher(dp)
     try:
         payment_id = await _seed_payment()
+        await fsm.get_fsm_context(555).set_state(AdFlow.waiting_payment)
         _mock_xpay("COMPLETED")
 
         assert await confirm_payment(payment_id) is True
@@ -189,3 +190,57 @@ async def test_confirm_returns_false_when_xpay_is_unreachable(db, monkeypatch):
 
 async def test_confirm_returns_false_for_unknown_payment(db):
     assert await confirm_payment(999_999) is False
+
+
+@respx.mock
+async def test_confirm_advances_a_stranded_already_completed_user(db, monkeypatch):
+    """A webhook may have marked the row COMPLETED already (e.g. because the
+    dispatcher was not registered yet, or the notify send failed) while the
+    user's FSM is still stuck in waiting_payment. The check button must still
+    be able to rescue them: no second API call, but the state must advance
+    and the confirmation must be sent."""
+    sent = []
+    monkeypatch.setattr(
+        "bot.handlers.ad_flow._notify_paid", lambda uid, lang: sent.append(uid)
+    )
+    dp = Dispatcher()
+    fsm.set_dispatcher(dp)
+    try:
+        payment_id = await _seed_payment(status="COMPLETED")
+        await fsm.get_fsm_context(555).set_state(AdFlow.waiting_payment)
+        route = _mock_xpay("COMPLETED")
+
+        assert await confirm_payment(payment_id) is True
+
+        assert route.call_count == 0, "an already-completed payment needs no API call"
+        assert await fsm.get_fsm_context(555).get_state() == AdFlow.content.state
+        assert sent == [555]
+    finally:
+        fsm._dispatcher = None
+
+
+@respx.mock
+async def test_confirm_does_not_rewind_a_user_past_waiting_payment(db, monkeypatch):
+    """A duplicate webhook delivery for an already-completed payment must not
+    knock a user who has already moved on (e.g. into confirm_content) back
+    to content, nor re-notify them."""
+    sent = []
+    monkeypatch.setattr(
+        "bot.handlers.ad_flow._notify_paid", lambda uid, lang: sent.append(uid)
+    )
+    dp = Dispatcher()
+    fsm.set_dispatcher(dp)
+    try:
+        payment_id = await _seed_payment(status="COMPLETED")
+        await fsm.get_fsm_context(555).set_state(AdFlow.confirm_content)
+        route = _mock_xpay("COMPLETED")
+
+        assert await confirm_payment(payment_id) is True
+
+        assert route.call_count == 0, "an already-completed payment needs no API call"
+        assert (
+            await fsm.get_fsm_context(555).get_state() == AdFlow.confirm_content.state
+        )
+        assert sent == [], "a user already past waiting_payment must not be re-notified"
+    finally:
+        fsm._dispatcher = None

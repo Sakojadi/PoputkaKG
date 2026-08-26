@@ -381,6 +381,24 @@ def _notify_paid(user_id: int, lang: str) -> None:
     _spawn(get_bot().send_message(user_id, get_text(lang, "payment_confirmed")))
 
 
+async def _advance_to_content(user_id: int, lang: str) -> None:
+    """Move a paid user to content entry and tell them, exactly once.
+
+    Guarded on the user's current FSM state rather than the Payment row: the
+    row says money arrived, the state says whether the user has been told.
+    That makes this safe to call from the check button and from a duplicate
+    webhook delivery alike -- including a webhook that lands before this
+    process has a dispatcher, or after the user has already moved on.
+    """
+    state = get_fsm_context(user_id)
+    if state is None:
+        return
+    if await state.get_state() != AdFlow.waiting_payment.state:
+        return
+    await state.set_state(AdFlow.content)
+    _notify_paid(user_id, lang)
+
+
 async def confirm_payment(payment_id: int) -> bool:
     """Settle one payment. Shared by the check button and the xPay webhook.
 
@@ -393,6 +411,8 @@ async def confirm_payment(payment_id: int) -> bool:
         if payment is None:
             return False
         if payment.status == "COMPLETED":
+            lang = await get_user_lang(payment.user_id, session)
+            await _advance_to_content(payment.user_id, lang)
             return True
         qr_transaction_id = payment.qr_transaction_id
         user_id = payment.user_id
@@ -409,6 +429,8 @@ async def confirm_payment(payment_id: int) -> bool:
             return False
         if payment.status == "COMPLETED":
             # A concurrent caller (button vs webhook) already settled it.
+            lang = await get_user_lang(payment.user_id, session)
+            await _advance_to_content(payment.user_id, lang)
             return True
 
         payment.status = pay_status
@@ -423,11 +445,7 @@ async def confirm_payment(payment_id: int) -> bool:
 
         lang = await get_user_lang(user_id, session)
 
-    state = get_fsm_context(user_id)
-    if state is not None:
-        await state.set_state(AdFlow.content)
-
-    _notify_paid(user_id, lang)
+    await _advance_to_content(user_id, lang)
     logger.info(f"Payment {payment_id} confirmed for user {user_id}")
     return True
 
