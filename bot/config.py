@@ -3,11 +3,19 @@ import os
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+XPAY_BASE_URLS = {
+    "sandbox": "https://devapi.xpay.kg",
+    "production": "https://api.xpay.kg",
+}
+
 
 class Settings(BaseSettings):
     bot_token: str
     group_id: int | str = ""
-    xpay_api_key: str = ""
+    xpay_client_id: str = ""
+    xpay_client_secret: str = ""
+    xpay_mode: str = "sandbox"
+    public_base_url: str = ""
     openai_api_key: str = ""
     database_url: str = "sqlite+aiosqlite:///bot.db"
     admin_ids: list[int] = []
@@ -77,6 +85,33 @@ class Settings(BaseSettings):
             except ValueError:
                 pass
         return 8000
+
+    @field_validator("xpay_mode", mode="before")
+    @classmethod
+    def parse_xpay_mode(cls, v):
+        val = str(v or "sandbox").strip().strip("'\"").lower()
+        if val not in XPAY_BASE_URLS:
+            raise ValueError(
+                f"XPAY_MODE must be one of {sorted(XPAY_BASE_URLS)}, got {val!r}"
+            )
+        return val
+
+    @property
+    def xpay_base_url(self) -> str:
+        return XPAY_BASE_URLS[self.xpay_mode]
+
+    @property
+    def resolved_public_base_url(self) -> str | None:
+        """Origin xPay should call back to, or None when we are not reachable.
+
+        None means local development: the caller omits callback_url entirely
+        and the flow falls back to the user's "Check payment" button.
+        """
+        val = self.public_base_url.strip().strip("'\"").rstrip("/")
+        if val:
+            return val
+        domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip().strip("'\"")
+        return f"https://{domain}" if domain else None
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
