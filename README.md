@@ -25,5 +25,5 @@ Going live: obtain production keys from lk.xpay.kg, set
 `XPAY_MODE=production`. No code change is required — the merchant service
 uuid is resolved from the login response by mode.
 
-Manual sandbox probe: `PYTHONPATH=. uv run python scripts/xpay_smoke.py`.
+Manual sandbox probe: `uv run python -m scripts.xpay_smoke`.
 Test payments are settled at https://sandbox.xpay.kg.
