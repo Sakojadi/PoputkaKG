@@ -17,8 +17,8 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from bot.config import config
 from bot.database.db import AsyncSessionLocal
-from bot.database.models import Campaign, GroupPost, User
-from bot.handlers.ad_flow import _spawn
+from bot.database.models import Campaign, GroupPost, Payment, User
+from bot.handlers.ad_flow import _spawn, confirm_payment
 from bot.services.group_posts import build_group_post_markup
 from bot.services.moderation import BANNED_WORDS
 from bot.services.scheduler import (
@@ -29,6 +29,7 @@ from bot.services.scheduler import (
 )
 from bot.services.settings_store import get_price_per_ad, get_setting, set_setting
 from bot.services.tg import get_bot
+from bot.services.xpay import WEBHOOK_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,57 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.get("/health")
 async def health_check():
+    return {"status": "ok"}
+
+
+def _extract_qr_transaction_id(body) -> str:
+    """Pull the transaction id from either a flat or a `data`-wrapped body."""
+    if not isinstance(body, dict):
+        return ""
+    candidate = body.get("qr_transaction_id")
+    if not candidate and isinstance(body.get("data"), dict):
+        candidate = body["data"].get("qr_transaction_id")
+    return str(candidate or "").strip()
+
+
+@app.post(WEBHOOK_PATH)
+async def xpay_webhook(request: Request):
+    """Public, unauthenticated: xPay cannot present an admin session cookie.
+
+    The callback is unsigned, so nothing in the body is trusted. We take
+    only the transaction id and then ask the xPay status endpoint what
+    actually happened. A forged request can at worst cost us one status
+    call for a transaction that already exists.
+
+    Always returns 200 - including on internal failure - so xPay stops
+    retrying. The user's "Check payment" button remains the fallback.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"status": "ok"}
+
+    qr_transaction_id = _extract_qr_transaction_id(body)
+    if not qr_transaction_id:
+        return {"status": "ok"}
+
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Payment).where(
+                    Payment.qr_transaction_id == qr_transaction_id
+                )
+            )
+            payment = result.scalar_one_or_none()
+
+        if payment is None:
+            logger.info(f"xPay webhook for unknown transaction {qr_transaction_id}")
+            return {"status": "ok"}
+
+        await confirm_payment(payment.id)
+    except Exception as e:
+        logger.warning(f"xPay webhook failed for {qr_transaction_id}: {e}")
+
     return {"status": "ok"}
 
 
