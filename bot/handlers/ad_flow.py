@@ -378,7 +378,7 @@ async def process_payment(callback: CallbackQuery, state: FSMContext):
     price = count * await get_price_per_ad()
 
     link, payment_id = await generate_xpay_link(price)
-    await state.update_data(payment_id=payment_id)
+    await state.update_data(payment_id=payment_id, price=price)
 
     msg_text = get_text(lang, "payment_info", price=price, link=link)
     markup = InlineKeyboardMarkup(
@@ -492,6 +492,7 @@ async def process_content_ok(callback: CallbackQuery, state: FSMContext):
             content_text=data.get("content_text"),
             content_photo=data.get("content_photo"),
             is_active=True,
+            price_paid=data.get("price", 0.0),
         )
         session.add(campaign)
         await session.commit()

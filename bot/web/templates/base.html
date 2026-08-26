@@ -1828,6 +1828,7 @@
 
             // Intercept form submissions for instant feedback
             document.addEventListener('submit', async function(e) {
+                if (e.defaultPrevented) return;
                 const form = e.target;
                 const action = form.getAttribute('action') || window.location.href;
                 const method = (form.getAttribute('method') || 'GET').toUpperCase();
