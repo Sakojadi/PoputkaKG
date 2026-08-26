@@ -195,7 +195,7 @@
 
         div.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 11px; font-weight: 700; color: #a78bfa;">
+                <span style="font-size: 11px; font-weight: 700; color: var(--accent-purple-text);">
                     <i class="fa-solid fa-link"></i> Кнопка ${rows.length + 1}
                 </span>
                 ${rows.length > 0 ? `<button type="button" onclick="removeButton('${rowId}')" style="background: none; border: none; color: var(--accent-rose); cursor: pointer; font-size: 12px; padding: 4px 8px;"><i class="fa-solid fa-trash"></i> Удалить</button>` : ''}

@@ -210,7 +210,7 @@
                     <td data-label="Username">
                         {% if u.username %}
                         <a href="https://t.me/{{ u.username }}" target="_blank" rel="noopener"
-                           style="color: #60a5fa; text-decoration: none; font-weight: 600; font-size: 13px;">
+                           style="color: var(--accent-blue-text); text-decoration: none; font-weight: 600; font-size: 13px;">
                             @{{ u.username }}
                         </a>
                         {% else %}
@@ -221,7 +221,7 @@
                         {% if u.language == 'ky' %}🇰🇬 Кыргызча{% else %}🇷🇺 Русский{% endif %}
                     </td>
                     <td data-label="Объявлений">{{ u.campaigns_count }}</td>
-                    <td class="nowrap" data-label="Потрачено"><strong style="color: #34d399;">{{ u.total_spent }} сом</strong></td>
+                    <td class="nowrap" data-label="Потрачено"><strong style="color: var(--accent-emerald-text);">{{ u.total_spent }} сом</strong></td>
                     <td class="nowrap" data-label="Регистрация" style="color: var(--text-secondary);">
                         {{ u.created_at.strftime('%d.%m.%Y') if u.created_at else '—' }}
                     </td>
@@ -268,7 +268,7 @@
                             <p>
                                 {% if q or active_filters %}
                                 Под выбранные фильтры никто не подошёл.<br>
-                                <a href="/admin/users" style="color: #60a5fa;" data-reset-filters>Сбросить фильтры</a>
+                                <a href="/admin/users" style="color: var(--accent-blue-text);" data-reset-filters>Сбросить фильтры</a>
                                 {% else %}
                                 Пользователей пока нет.
                                 {% endif %}

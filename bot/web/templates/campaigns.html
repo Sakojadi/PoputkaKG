@@ -225,7 +225,7 @@
                         </div>
                     </td>
                     <td class="nowrap" data-label="Интервал">{{ c.interval_minutes }} мин</td>
-                    <td class="nowrap" data-label="Сумма"><strong style="color: #34d399;">{{ c.price_paid }} сом</strong></td>
+                    <td class="nowrap" data-label="Сумма"><strong style="color: var(--accent-emerald-text);">{{ c.price_paid }} сом</strong></td>
                     <td class="nowrap" data-label="Создано" style="color: var(--text-secondary);">
                         {{ c.created_at.strftime('%d.%m.%Y %H:%M') if c.created_at else '—' }}
                     </td>
@@ -282,7 +282,7 @@
                             <p>
                                 {% if q or active_filters %}
                                 Под выбранные фильтры ничего не подошло.<br>
-                                <a href="/admin/campaigns" style="color: #60a5fa;" data-reset-filters>Сбросить фильтры</a>
+                                <a href="/admin/campaigns" style="color: var(--accent-blue-text);" data-reset-filters>Сбросить фильтры</a>
                                 {% else %}
                                 Объявлений пока нет.
                                 {% endif %}
@@ -338,8 +338,8 @@
             <div>
                 <h3 style="font-size: 17px; font-weight: 700;">Пользователь</h3>
                 <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                    <code id="modalUserId" style="font-size: 13px; color: #60a5fa;">-</code>
-                    <span id="modalUserUsername" style="font-size: 13px; color: #a78bfa;"></span>
+                    <code id="modalUserId" style="font-size: 13px; color: var(--accent-blue-text);">-</code>
+                    <span id="modalUserUsername" style="font-size: 13px; color: var(--accent-purple-text);"></span>
                 </div>
             </div>
         </div>
@@ -355,7 +355,7 @@
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <span style="color: var(--text-secondary);">Потрачено:</span>
-                <strong id="modalUserSpent" style="color: #34d399;">-</strong>
+                <strong id="modalUserSpent" style="color: var(--accent-emerald-text);">-</strong>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <span style="color: var(--text-secondary);">Статус в боте:</span>
