@@ -106,6 +106,9 @@
 </div>
 
 <script>
+// Wrapped in an IIFE: the SPA router re-inserts this script on every visit,
+// so top-level declarations would clash and DOMContentLoaded never fires again.
+(function() {
     const botUsername = "{{ bot_username }}";
     const defaultBotUrl = botUsername ? `https://t.me/${botUsername}` : "https://t.me/your_bot";
     const MAX_BUTTONS = 5;
@@ -129,7 +132,7 @@
         }
     }
 
-    function addButton(text = "", url = "") {
+    window.addButton = function(text = "", url = "") {
         const container = document.getElementById('buttonsList');
         const rows = getButtonRows();
         if (rows.length >= MAX_BUTTONS) return;
@@ -157,7 +160,7 @@
         updateButtonCount();
     }
 
-    function removeButton(id) {
+    window.removeButton = function(id) {
         const el = document.getElementById(id);
         if (el) {
             el.remove();
@@ -165,13 +168,13 @@
         }
     }
 
-    function clearAll() {
+    window.clearAll = function() {
         document.getElementById('group_text').value = "";
         document.getElementById('buttonsList').innerHTML = "";
         addButton("", "");
     }
 
-    function applyTemplate(lang) {
+    window.applyTemplate = function(lang) {
         document.getElementById('buttonsList').innerHTML = "";
         if (lang === 'ky') {
             document.getElementById('group_text').value = "Сиз да реклама бергиңиз келеби? Ушул ботко жазыңыз!";
@@ -182,9 +185,9 @@
         }
     }
 
-    // Default init with 1 button
-    window.addEventListener('DOMContentLoaded', () => {
-        applyTemplate('ky');
-    });
+    // Run immediately: this script is executed after the markup is in place,
+    // both on a full page load and on an SPA swap.
+    applyTemplate('ky');
+})();
 </script>
 {% endblock %}

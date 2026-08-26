@@ -18,10 +18,31 @@ from bot.handlers.start import get_user_lang, main_keyboard
 from bot.locales.translations import TEXTS, get_text
 from bot.services.moderation import moderate_full_content
 from bot.services.payment import check_xpay_payment, generate_xpay_link
-from bot.services.scheduler import scheduler
+from bot.services.scheduler import remove_campaign_job, schedule_campaign
+from bot.services.tg import get_bot
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+# A campaign whose posts keep failing (bot kicked from the group, expired photo,
+# deleted chat) is deactivated instead of retrying forever.
+MAX_CONSECUTIVE_FAILURES = 5
+
+# Cap the stored history so the column cannot grow without bound. Must stay well
+# above any realistic publications_total: admin "delete from group" can only
+# remove the posts listed here, so a truncated history leaves posts undeletable.
+MAX_TRACKED_MESSAGE_IDS = 2000
+
+# asyncio only holds a weak reference to running tasks, so a fire-and-forget
+# task can be garbage collected mid-execution unless we keep it alive.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
 
 
 class AdFlow(StatesGroup):
@@ -46,25 +67,27 @@ async def post_ad(user_id: int, campaign_id: int):
                 f"Aborting ad post for campaign {campaign_id}: User {user_id} is banned."
             )
             campaign.is_active = False
-            if campaign.job_id:
-                try:
-                    scheduler.remove_job(campaign.job_id)
-                except Exception:
-                    pass
+            remove_campaign_job(campaign)
             await session.commit()
             return
 
         lang = await get_user_lang(user_id, session)
         total_published = campaign.publications_total
 
-        bot = Bot(token=config.bot_token)
-        try:
-            if not config.group_id:
-                logger.error(
-                    "GROUP_ID is not configured in settings/env! Cannot post ad."
-                )
-                return
+        if not config.group_id:
+            # A missing GROUP_ID is a deployment problem, not a problem with this
+            # campaign: counting it as a failure would deactivate every active
+            # campaign at once, with publications left and no refund. Abort
+            # without touching the counter and let the job retry once the env var
+            # is restored -- retrying is cheap now that the Bot is a singleton.
+            logger.error(
+                f"Skipping ad post for campaign #{campaign_id}: "
+                "GROUP_ID is not configured in settings/env"
+            )
+            return
 
+        bot = get_bot()
+        try:
             if campaign.content_photo:
                 sent_msg = await bot.send_photo(
                     chat_id=config.group_id,
@@ -84,21 +107,18 @@ async def post_ad(user_id: int, campaign_id: int):
                     if x.strip()
                 ]
                 existing.append(str(sent_msg.message_id))
-                campaign.message_ids = ",".join(existing)
+                campaign.message_ids = ",".join(existing[-MAX_TRACKED_MESSAGE_IDS:])
 
             logger.info(
                 f"Successfully posted ad for campaign #{campaign_id} (user {user_id}) to {config.group_id}"
             )
 
             campaign.publications_left -= 1
+            campaign.failure_count = 0
 
             if campaign.publications_left <= 0:
                 campaign.is_active = False
-                if campaign.job_id:
-                    try:
-                        scheduler.remove_job(campaign.job_id)
-                    except Exception:
-                        pass
+                remove_campaign_job(campaign)
 
                 try:
                     finish_msg = get_text(lang, "ad_finished", count=total_published)
@@ -109,12 +129,47 @@ async def post_ad(user_id: int, campaign_id: int):
             await session.commit()
 
         except Exception as e:
-            logger.error(
-                f"Failed to post ad #{campaign_id} to group {config.group_id}: {e}. Ensure the bot is an Administrator in the group with permission to post messages!"
-            )
+            # The commit above is inside this try, so the failure may be the
+            # commit itself. Roll back first: writing to a session that is in a
+            # pending-rollback state raises, which would lose the failure counter
+            # as well and leave the job retrying forever.
+            try:
+                await session.rollback()
+
+                # rollback() expires every instance in the session (unconditionally,
+                # regardless of expire_on_commit), so touching the old `campaign`
+                # object would trigger a lazy refresh SELECT and raise
+                # MissingGreenlet under AsyncSession. Re-fetch instead.
+                campaign = await session.get(Campaign, campaign_id)
+                if campaign is None:
+                    return
+
+                campaign.failure_count = (campaign.failure_count or 0) + 1
+                logger.error(
+                    f"Failed to post ad #{campaign_id} to group {config.group_id} "
+                    f"(failure {campaign.failure_count}/{MAX_CONSECUTIVE_FAILURES}): {e}. "
+                    "Ensure the bot is an Administrator in the group with permission to post messages!"
+                )
+
+                if campaign.failure_count >= MAX_CONSECUTIVE_FAILURES:
+                    # Stop retrying forever: an unstoppable job keeps the scheduler
+                    # busy and rebuilds Telegram clients every interval until OOM.
+                    campaign.is_active = False
+                    remove_campaign_job(campaign)
+                    logger.error(
+                        f"Campaign #{campaign_id} deactivated after "
+                        f"{campaign.failure_count} consecutive failures."
+                    )
+
+                await session.commit()
+            except Exception:
+                # If the failure counter cannot be persisted, the job would retry
+                # forever again; log loudly rather than swallowing it silently.
+                logger.exception(
+                    f"Could not persist failure state for campaign #{campaign_id} "
+                    f"(original error: {e})"
+                )
             return
-        finally:
-            await bot.session.close()
 
 
 AD_BUTTON_TEXTS = [TEXTS[l]["ad_button"] for l in TEXTS]
@@ -434,18 +489,11 @@ async def process_content_ok(callback: CallbackQuery, state: FSMContext):
         session.add(campaign)
         await session.commit()
 
-        job = scheduler.add_job(
-            post_ad,
-            "interval",
-            minutes=campaign.interval_minutes,
-            args=[callback.from_user.id, campaign.id],
-        )
-
-        campaign.job_id = job.id
+        campaign.job_id = schedule_campaign(campaign)
         session.add(campaign)
         await session.commit()
 
-    asyncio.create_task(post_ad(callback.from_user.id, campaign.id))
+    _spawn(post_ad(campaign.user_id, campaign.id))
 
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -484,11 +532,7 @@ async def stop_campaign(callback: CallbackQuery):
             and campaign.is_active
         ):
             campaign.is_active = False
-            if campaign.job_id:
-                try:
-                    scheduler.remove_job(campaign.job_id)
-                except Exception:
-                    pass
+            remove_campaign_job(campaign)
             await session.commit()
             await callback.answer(get_text(lang, "ad_stopped"), show_alert=True)
 
@@ -548,14 +592,8 @@ async def resume_campaign(callback: CallbackQuery):
                 return
 
             campaign.is_active = True
-
-            job = scheduler.add_job(
-                post_ad,
-                "interval",
-                minutes=campaign.interval_minutes,
-                args=[callback.from_user.id, campaign.id],
-            )
-            campaign.job_id = job.id
+            campaign.failure_count = 0
+            campaign.job_id = schedule_campaign(campaign)
             await session.commit()
 
             await callback.answer(get_text(lang, "ad_started"), show_alert=True)

@@ -3,52 +3,181 @@
 {% block title %}Управление рекламой | Poputka Bot{% endblock %}
 
 {% block content %}
+{#- Every active filter, so pagination / removable pills can rebuild the URL -#}
+{%- set filter_params = {
+    'q': q,
+    'status': status,
+    'period': period,
+    'photo': photo,
+    'sort': sort if sort != 'new' else '',
+    'limit': limit|string if limit != 10 else ''
+} -%}
+{%- macro url_without(skip) -%}
+{%- set parts = [] -%}
+{%- for k, v in filter_params.items() -%}
+{%- if k != skip and v and v != 'all' -%}{%- set _ = parts.append(k ~ '=' ~ v|urlencode) -%}{%- endif -%}
+{%- endfor -%}
+/admin/campaigns{% if parts %}?{{ parts|join('&') }}{% endif %}
+{%- endmacro -%}
+{%- set current_url = '/admin/campaigns?page=' ~ page ~ ('&' ~ filter_qs if filter_qs else '') -%}
+
 <div class="page-header">
     <div class="page-title">
         <h2>Рекламные кампании</h2>
-        <p>Список всех объявлений, управление интервалами и удаление постов из группы</p>
+        <p>Фильтруйте объявления, управляйте публикацией и удаляйте посты из группы</p>
     </div>
 </div>
 
 {% if msg %}
 <div class="alert alert-success">
-    <i class="fa-solid fa-circle-check"></i> {{ msg }}
+    <i class="fa-solid fa-circle-check"></i> <span>{{ msg }}</span>
 </div>
 {% endif %}
 
-<!-- Search and Filter Bar -->
-<div style="display: flex; justify-content: space-between; align-items: stretch; margin-bottom: 20px; gap: 12px; flex-wrap: wrap;">
-    <form action="/admin/campaigns" method="GET" style="display: flex; gap: 8px; flex: 1 1 300px; max-width: 100%;">
-        <input type="text" name="q" value="{{ q }}" placeholder="Поиск по ID, User ID или тексту..." class="form-control" style="padding: 10px 14px; min-height: 42px;">
-        <button type="submit" class="btn btn-primary" style="padding: 10px 16px; flex-shrink: 0; min-height: 42px;">
-            <i class="fa-solid fa-magnifying-glass"></i> <span class="d-none-mobile">Найти</span>
-        </button>
-        {% if q %}
-        <a href="/admin/campaigns" class="btn btn-secondary" style="padding: 10px 14px; flex-shrink: 0; min-height: 42px;" title="Сбросить поиск">
-            <i class="fa-solid fa-xmark"></i>
-        </a>
-        {% endif %}
-    </form>
-    
-    <div style="font-size: 13px; color: var(--text-secondary); display: flex; align-items: center;">
-        Найдено: <strong style="color: var(--text-primary); margin-left: 4px;">{{ total_items }}</strong>&nbsp;объявлений
-    </div>
-</div>
-
 <div class="table-card">
-    <div class="table-header">
-        <h3>Объявления (Стр. {{ page }}/{{ total_pages }})</h3>
+    <!-- Search + filters -->
+    <form action="/admin/campaigns" method="GET" data-autosubmit>
+        <div class="toolbar">
+            <div class="search-field">
+                <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                <input type="search" name="q" value="{{ q }}" class="form-control"
+                       placeholder="ID, User ID или текст объявления..."
+                       autocomplete="off" enterkeyhint="search">
+                {% if q %}
+                <button type="button" class="search-clear" data-search-clear aria-label="Очистить поиск">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+                {% endif %}
+            </div>
+
+            <button type="button" class="filter-toggle {% if active_filters %}has-filters{% endif %}"
+                    data-filter-toggle="campaignFilters" aria-expanded="false" aria-controls="campaignFilters">
+                <i class="fa-solid fa-sliders"></i>
+                <span>Фильтры</span>
+                {% if active_filters %}<span class="filter-count">{{ active_filters }}</span>{% endif %}
+                <i class="fa-solid fa-chevron-down chevron"></i>
+            </button>
+
+            <button type="submit" class="btn btn-primary d-none-mobile">
+                <i class="fa-solid fa-magnifying-glass"></i> Найти
+            </button>
+        </div>
+
+        <div class="filter-panel" id="campaignFilters" hidden>
+            <div class="filter-group">
+                <span class="filter-title">Статус</span>
+                <div class="chips">
+                    {% for value, label, icon in [
+                        ('all', 'Все', 'fa-layer-group'),
+                        ('active', 'Активные', 'fa-circle-play'),
+                        ('stopped', 'На стопе', 'fa-circle-stop'),
+                        ('completed', 'Завершённые', 'fa-check')
+                    ] %}
+                    <label class="chip {% if status == value %}is-active{% endif %}">
+                        <input type="radio" name="status" value="{{ value }}" {% if status == value %}checked{% endif %}>
+                        <i class="fa-solid {{ icon }}"></i>{{ label }}
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="filter-group">
+                <span class="filter-title">Медиа</span>
+                <div class="chips">
+                    {% for value, label, icon in [
+                        ('all', 'Любые', 'fa-asterisk'),
+                        ('yes', 'С фото', 'fa-image'),
+                        ('no', 'Только текст', 'fa-align-left')
+                    ] %}
+                    <label class="chip {% if photo == value %}is-active{% endif %}">
+                        <input type="radio" name="photo" value="{{ value }}" {% if photo == value %}checked{% endif %}>
+                        <i class="fa-solid {{ icon }}"></i>{{ label }}
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="filter-group">
+                <label class="filter-title" for="fPeriod">Период создания</label>
+                <select name="period" id="fPeriod" class="form-control">
+                    <option value="all" {% if period == 'all' %}selected{% endif %}>За всё время</option>
+                    <option value="today" {% if period == 'today' %}selected{% endif %}>Сегодня</option>
+                    <option value="7d" {% if period == '7d' %}selected{% endif %}>Последние 7 дней</option>
+                    <option value="30d" {% if period == '30d' %}selected{% endif %}>Последние 30 дней</option>
+                    <option value="90d" {% if period == '90d' %}selected{% endif %}>Последние 90 дней</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label class="filter-title" for="fSort">Сортировка</label>
+                <select name="sort" id="fSort" class="form-control">
+                    <option value="new" {% if sort == 'new' %}selected{% endif %}>Сначала новые</option>
+                    <option value="old" {% if sort == 'old' %}selected{% endif %}>Сначала старые</option>
+                    <option value="price_desc" {% if sort == 'price_desc' %}selected{% endif %}>Сумма: по убыванию</option>
+                    <option value="price_asc" {% if sort == 'price_asc' %}selected{% endif %}>Сумма: по возрастанию</option>
+                    <option value="left_desc" {% if sort == 'left_desc' %}selected{% endif %}>Больше осталось публикаций</option>
+                    <option value="total_desc" {% if sort == 'total_desc' %}selected{% endif %}>Больше всего куплено</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label class="filter-title" for="fLimit">Строк на странице</label>
+                <select name="limit" id="fLimit" class="form-control">
+                    {% for n in [10, 25, 50, 100] %}
+                    <option value="{{ n }}" {% if limit == n %}selected{% endif %}>{{ n }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+    </form>
+
+    <!-- Currently applied filters, one tap to remove -->
+    {% if q or active_filters %}
+    <div class="active-pills">
+        {% if q %}
+        <a href="{{ url_without('q') }}" class="pill"><i class="fa-solid fa-xmark"></i> Поиск: {{ q }}</a>
+        {% endif %}
+        {% if status != 'all' %}
+        <a href="{{ url_without('status') }}" class="pill"><i class="fa-solid fa-xmark"></i>
+            {{ {'active': 'Активные', 'stopped': 'На стопе', 'completed': 'Завершённые'}[status] }}</a>
+        {% endif %}
+        {% if photo != 'all' %}
+        <a href="{{ url_without('photo') }}" class="pill"><i class="fa-solid fa-xmark"></i>
+            {{ 'С фото' if photo == 'yes' else 'Только текст' }}</a>
+        {% endif %}
+        {% if period != 'all' %}
+        <a href="{{ url_without('period') }}" class="pill"><i class="fa-solid fa-xmark"></i>
+            {{ {'today': 'Сегодня', '7d': '7 дней', '30d': '30 дней', '90d': '90 дней'}[period] }}</a>
+        {% endif %}
+        {% if sort != 'new' %}
+        <a href="{{ url_without('sort') }}" class="pill"><i class="fa-solid fa-xmark"></i> Своя сортировка</a>
+        {% endif %}
+        <a href="/admin/campaigns" class="pill pill-reset"><i class="fa-solid fa-rotate-left"></i> Сбросить всё</a>
     </div>
+    {% endif %}
+
+    <!-- Totals for the whole filtered set, not just this page -->
+    <div class="result-strip">
+        <span>Найдено: <strong>{{ total_items }}</strong></span>
+        <span class="dot"></span>
+        <span>Сумма: <strong>{{ filtered_revenue }} сом</strong></span>
+        <span class="dot"></span>
+        <span>Осталось публикаций: <strong>{{ filtered_left }}</strong></span>
+        <span class="dot"></span>
+        <span>Стр. <strong>{{ page }}</strong> из {{ total_pages }}</span>
+    </div>
+
     <div class="table-responsive">
-        <table>
+        <table class="data-table">
             <thead>
                 <tr>
                     <th>ID</th>
                     <th>Пользователь</th>
                     <th>Содержание</th>
-                    <th>Осталось / Всего</th>
+                    <th>Публикации</th>
                     <th>Интервал</th>
                     <th>Сумма</th>
+                    <th>Создано</th>
                     <th>Статус</th>
                     <th>Управление</th>
                 </tr>
@@ -56,30 +185,51 @@
             <tbody>
                 {% for c in campaigns %}
                 <tr>
-                    <td>#{{ c.id }}</td>
-                    <td>
-                        <button type="button" class="btn btn-secondary" style="padding: 6px 10px; font-size: 13px; font-family: monospace; border-radius: 8px; min-height: 32px;" onclick="showUserModal({{ c.user_id }})">
-                            <i class="fa-solid fa-user" style="color: #60a5fa; font-size: 11px;"></i> {{ c.user_id }}
+                    <td class="cell-head">
+                        <span>#{{ c.id }}</span>
+                        <span class="mobile-only">
+                            {% if c.is_active and c.publications_left > 0 %}
+                            <span class="badge badge-active"><i class="fa-solid fa-circle-play"></i> Активно</span>
+                            {% elif c.publications_left <= 0 %}
+                            <span class="badge badge-completed"><i class="fa-solid fa-check"></i> Завершено</span>
+                            {% else %}
+                            <span class="badge badge-stopped"><i class="fa-solid fa-circle-stop"></i> Стоп</span>
+                            {% endif %}
+                        </span>
+                    </td>
+                    <td data-label="Пользователь">
+                        <button type="button" class="user-chip" onclick="showUserModal({{ c.user_id }})">
+                            <i class="fa-solid fa-user"></i> {{ c.user_id }}
                         </button>
                     </td>
-                    <td style="min-width: 200px; max-width: 320px;">
-                        <div style="display: flex; gap: 10px; align-items: flex-start;">
+                    <td class="cell-block" data-label="Содержание" style="min-width: 200px; max-width: 340px;">
+                        <div class="ad-preview">
                             {% if c.content_photo %}
-                            <img src="/admin/media/photo/{{ c.content_photo }}" 
-                                 alt="Фото" 
-                                 onclick="openImageModal('/admin/media/photo/{{ c.content_photo }}')"
-                                 style="width: 48px; height: 48px; object-fit: cover; border-radius: 10px; border: 1px solid rgba(255,255,255,0.15); cursor: pointer; flex-shrink: 0; transition: transform 0.2s; box-shadow: 0 4px 10px rgba(0,0,0,0.3);"
-                                 title="Нажмите, чтобы увеличить фото">
+                            <img src="/admin/media/photo/{{ c.content_photo }}" alt="Фото объявления" class="ad-thumb"
+                                 loading="lazy" title="Нажмите, чтобы увеличить"
+                                 onclick="openImageModal('/admin/media/photo/{{ c.content_photo }}')">
                             {% endif %}
-                            <span style="font-size: 13px; color: var(--text-secondary); line-height: 1.4; word-break: break-word;">
+                            <span class="ad-text">
                                 {{ (c.content_text[:85] + '...') if c.content_text and c.content_text|length > 85 else (c.content_text or 'Без текста') }}
                             </span>
                         </div>
                     </td>
-                    <td style="white-space: nowrap;"><strong>{{ c.publications_left }}</strong> / {{ c.publications_total }}</td>
-                    <td style="white-space: nowrap;">{{ c.interval_minutes }} мин</td>
-                    <td style="white-space: nowrap;"><strong style="color: #34d399;">{{ c.price_paid }} сом</strong></td>
-                    <td>
+                    <td class="cell-block" data-label="Публикации">
+                        <div>
+                            <strong>{{ c.publications_left }}</strong>
+                            <span style="color: var(--text-secondary);">/ {{ c.publications_total }} осталось</span>
+                        </div>
+                        {% set done = (c.publications_total or 0) - (c.publications_left or 0) %}
+                        <div class="progress {% if c.publications_left <= 0 %}is-done{% endif %}">
+                            <span style="width: {{ (100 * done / c.publications_total)|round(0, 'floor')|int if c.publications_total else 0 }}%;"></span>
+                        </div>
+                    </td>
+                    <td class="nowrap" data-label="Интервал">{{ c.interval_minutes }} мин</td>
+                    <td class="nowrap" data-label="Сумма"><strong style="color: #34d399;">{{ c.price_paid }} сом</strong></td>
+                    <td class="nowrap" data-label="Создано" style="color: var(--text-secondary);">
+                        {{ c.created_at.strftime('%d.%m.%Y %H:%M') if c.created_at else '—' }}
+                    </td>
+                    <td class="d-none-mobile">
                         {% if c.is_active and c.publications_left > 0 %}
                         <span class="badge badge-active"><i class="fa-solid fa-circle-play"></i> Активно</span>
                         {% elif c.publications_left <= 0 %}
@@ -88,32 +238,36 @@
                         <span class="badge badge-stopped"><i class="fa-solid fa-circle-stop"></i> Стоп</span>
                         {% endif %}
                     </td>
-                    <td>
-                        <div style="display: flex; gap: 6px; flex-wrap: wrap; min-width: 140px;">
+                    <td class="cell-actions">
+                        <div class="row-actions" style="min-width: 150px;">
                             {% if c.is_active and c.publications_left > 0 %}
-                            <form action="/admin/campaigns/{{ c.id }}/stop" method="POST" style="display: inline;">
+                            <form action="/admin/campaigns/{{ c.id }}/stop" method="POST">
+                                <input type="hidden" name="redirect_to" value="{{ current_url }}">
                                 <button type="submit" class="btn btn-danger" style="padding: 6px 10px; font-size: 12px; min-height: 32px;" title="Остановить публикацию">
                                     <i class="fa-solid fa-stop"></i> Стоп
                                 </button>
                             </form>
                             {% elif not c.is_active and c.publications_left > 0 %}
-                            <form action="/admin/campaigns/{{ c.id }}/resume" method="POST" style="display: inline;">
+                            <form action="/admin/campaigns/{{ c.id }}/resume" method="POST">
+                                <input type="hidden" name="redirect_to" value="{{ current_url }}">
                                 <button type="submit" class="btn btn-success" style="padding: 6px 10px; font-size: 12px; min-height: 32px;" title="Возобновить публикацию">
                                     <i class="fa-solid fa-play"></i> Пуск
                                 </button>
                             </form>
                             {% endif %}
 
-                            <form action="/admin/campaigns/{{ c.id }}/delete" method="POST" style="display: inline;" onsubmit="return confirm('Удалить ТОЛЬКО из базы данных?');">
+                            <form action="/admin/campaigns/{{ c.id }}/delete" method="POST" onsubmit="return confirm('Удалить объявление #{{ c.id }} ТОЛЬКО из базы данных?');">
                                 <input type="hidden" name="delete_from_group" value="false">
+                                <input type="hidden" name="redirect_to" value="{{ current_url }}">
                                 <button type="submit" class="btn btn-secondary" style="padding: 6px 10px; font-size: 12px; min-height: 32px;" title="Удалить только из базы данных">
                                     <i class="fa-solid fa-database"></i> БД
                                 </button>
                             </form>
 
-                            <form action="/admin/campaigns/{{ c.id }}/delete" method="POST" style="display: inline;" onsubmit="return confirm('⚠️ ВНИМАНИЕ: Это удалит объявление из базы И СТЕРЕТ ВСЕ СООБЩЕНИЯ ЭТОГО ОБЪЯВЛЕНИЯ ИЗ ГРУППЫ! Продолжить?');">
+                            <form action="/admin/campaigns/{{ c.id }}/delete" method="POST" onsubmit="return confirm('⚠️ ВНИМАНИЕ: объявление #{{ c.id }} будет удалено из базы И ВСЕ ЕГО СООБЩЕНИЯ БУДУТ СТЁРТЫ ИЗ ГРУППЫ! Продолжить?');">
                                 <input type="hidden" name="delete_from_group" value="true">
-                                <button type="submit" class="btn btn-secondary" style="padding: 6px 10px; font-size: 12px; min-height: 32px; color: var(--accent-rose); border-color: rgba(244, 63, 94, 0.4);" title="Стереть из группы Telegram и удалить из базы">
+                                <input type="hidden" name="redirect_to" value="{{ current_url }}">
+                                <button type="submit" class="btn btn-secondary span-2" style="padding: 6px 10px; font-size: 12px; min-height: 32px; color: var(--accent-rose); border-color: rgba(244, 63, 94, 0.4);" title="Стереть из группы Telegram и удалить из базы">
                                     <i class="fa-solid fa-trash-can"></i> Стереть
                                 </button>
                             </form>
@@ -122,8 +276,18 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">
-                        Объявлений не найдено.
+                    <td colspan="9" class="cell-empty">
+                        <div class="empty-state">
+                            <i class="fa-solid fa-inbox"></i>
+                            <p>
+                                {% if q or active_filters %}
+                                Под выбранные фильтры ничего не подошло.<br>
+                                <a href="/admin/campaigns" style="color: #60a5fa;">Сбросить фильтры</a>
+                                {% else %}
+                                Объявлений пока нет.
+                                {% endif %}
+                            </p>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
@@ -132,46 +296,44 @@
     </div>
 </div>
 
-<!-- Pagination Controls -->
 {% if total_pages > 1 %}
-<div style="display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 24px; flex-wrap: wrap;">
+<div class="pagination">
     {% if page > 1 %}
-    <a href="/admin/campaigns?page={{ page - 1 }}{% if q %}&q={{ q }}{% endif %}" class="btn btn-secondary" style="padding: 8px 14px; min-height: 38px;">
-        ← Назад
+    <a href="/admin/campaigns?page={{ page - 1 }}{% if filter_qs %}&{{ filter_qs }}{% endif %}" class="btn btn-secondary">
+        <i class="fa-solid fa-chevron-left"></i> Назад
     </a>
     {% endif %}
 
-    <span style="font-size: 13px; font-weight: 600; color: var(--text-secondary); padding: 0 8px;">
-        {{ page }} / {{ total_pages }}
-    </span>
+    <span class="page-indicator">{{ page }} / {{ total_pages }}</span>
 
     {% if page < total_pages %}
-    <a href="/admin/campaigns?page={{ page + 1 }}{% if q %}&q={{ q }}{% endif %}" class="btn btn-secondary" style="padding: 8px 14px; min-height: 38px;">
-        Вперед →
+    <a href="/admin/campaigns?page={{ page + 1 }}{% if filter_qs %}&{{ filter_qs }}{% endif %}" class="btn btn-secondary">
+        Вперед <i class="fa-solid fa-chevron-right"></i>
     </a>
     {% endif %}
 </div>
 {% endif %}
 
-<!-- Full Image Preview Lightbox Modal -->
-<div id="imageModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 2000; align-items: center; justify-content: center; padding: 16px;">
+<!-- Full-size photo lightbox -->
+<div id="imageModal" class="modal-backdrop" style="background: rgba(0,0,0,0.88); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 2000;">
     <div style="position: relative; max-width: 95vw; max-height: 90vh; display: flex; flex-direction: column; align-items: center;">
-        <button type="button" onclick="closeImageModal()" style="position: absolute; top: -45px; right: 0; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.25); color: #fff; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: pointer;">
+        <button type="button" onclick="closeImageModal()" style="position: absolute; top: -46px; right: 0; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.25); color: #fff; width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: pointer;">
             <i class="fa-solid fa-xmark"></i>
         </button>
-        <img id="previewImageSrc" src="" alt="Full Preview" style="max-width: 90vw; max-height: 80vh; object-fit: contain; border-radius: 14px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.8); border: 1px solid rgba(255,255,255,0.2);">
+        <img id="previewImageSrc" src="" alt="Просмотр фото" style="max-width: 92vw; max-height: 78vh; object-fit: contain; border-radius: 14px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.8); border: 1px solid rgba(255,255,255,0.2);">
     </div>
 </div>
 
-<!-- Modal Dialog for User Actions -->
-<div id="userModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 1000; align-items: center; justify-content: center; padding: 16px;">
-    <div style="background: #111827; border: 1px solid rgba(255,255,255,0.15); border-radius: 20px; width: 100%; max-width: 420px; padding: 24px 20px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6); position: relative; max-height: 90vh; overflow-y: auto;">
-        
-        <button type="button" onclick="closeUserModal()" style="position: absolute; top: 16px; right: 16px; background: rgba(255,255,255,0.06); border: 1px solid var(--border); color: var(--text-secondary); width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer;">
+<!-- User quick-actions sheet -->
+<div id="userModal" class="modal-backdrop">
+    <div class="modal-sheet">
+        <div class="sheet-handle"></div>
+
+        <button type="button" class="modal-close" onclick="closeUserModal()" aria-label="Закрыть">
             <i class="fa-solid fa-xmark"></i>
         </button>
 
-        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding-right: 36px;">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding-right: 44px;">
             <div class="stat-icon icon-blue" style="width: 40px; height: 40px; font-size: 16px;"><i class="fa-solid fa-user"></i></div>
             <div>
                 <h3 style="font-size: 17px; font-weight: 700;">Пользователь</h3>
@@ -202,91 +364,80 @@
         </div>
 
         <div style="display: flex; gap: 8px; flex-direction: column;">
+            <a id="modalUserAds" href="#" class="btn btn-secondary" style="width: 100%; justify-content: center; min-height: 44px; font-size: 13px;">
+                <i class="fa-solid fa-rectangle-ad"></i> Все объявления этого пользователя
+            </a>
             <form id="modalBanForm" action="" method="POST" style="width: 100%;">
-                <button type="submit" id="modalBanBtn" class="btn" style="width: 100%; justify-content: center; padding: 12px; font-size: 13px; min-height: 44px;">
-                </button>
+                <button type="submit" id="modalBanBtn" class="btn" style="width: 100%; justify-content: center; padding: 12px; font-size: 13px; min-height: 44px;"></button>
             </form>
             <form id="modalKickForm" action="" method="POST" style="width: 100%;" onsubmit="return confirm('Исключить этого пользователя из Telegram-группы?');">
-                <button type="submit" class="btn btn-secondary" style="width: 100%; justify-content: center; padding: 10px 14px; min-height: 40px; font-size: 13px; color: var(--accent-rose); border-color: rgba(244, 63, 94, 0.4);">
+                <button type="submit" class="btn btn-secondary" style="width: 100%; justify-content: center; min-height: 44px; font-size: 13px; color: var(--accent-rose); border-color: rgba(244, 63, 94, 0.4);">
                     <i class="fa-solid fa-user-minus"></i> Исключить из Telegram-группы
                 </button>
             </form>
-            <a href="/admin/users" class="btn btn-secondary" style="width: 100%; justify-content: center; padding: 10px 14px; min-height: 40px; font-size: 13px;">
-                Все пользователи
-            </a>
         </div>
     </div>
 </div>
 
 <script>
-    const userMap = {{ user_map|tojson|safe }};
+    // Wrapped in an IIFE: this page can be re-inserted by the SPA router,
+    // and top-level `const` would otherwise clash on the second visit.
+    (function() {
+        const userMap = {{ user_map|tojson|safe }};
+        const returnTo = {{ current_url|tojson|safe }};
 
-    function openImageModal(imgUrl) {
-        document.getElementById('previewImageSrc').src = imgUrl;
-        document.getElementById('imageModal').style.display = 'flex';
-        document.body.style.overflow = 'hidden';
-    }
-
-    function closeImageModal() {
-        document.getElementById('imageModal').style.display = 'none';
-        document.getElementById('previewImageSrc').src = '';
-        document.body.style.overflow = '';
-    }
-
-    function showUserModal(userId) {
-        const u = userMap[userId] || {
-            id: userId,
-            username: "",
-            language: "Неизвестно",
-            campaigns_count: 1,
-            total_spent: 0,
-            is_banned: false
+        window.openImageModal = function(imgUrl) {
+            document.getElementById('previewImageSrc').src = imgUrl;
+            document.getElementById('imageModal').classList.add('open');
+            document.body.style.overflow = 'hidden';
         };
 
-        document.getElementById('modalUserId').innerText = u.id;
-        document.getElementById('modalUserUsername').innerText = u.username ? ('@' + u.username) : '';
-        document.getElementById('modalUserLang').innerText = u.language;
-        document.getElementById('modalUserCampaigns').innerText = u.campaigns_count + ' шт.';
-        document.getElementById('modalUserSpent').innerText = u.total_spent + ' сом';
+        window.closeImageModal = function() {
+            document.getElementById('imageModal').classList.remove('open');
+            document.getElementById('previewImageSrc').src = '';
+            document.body.style.overflow = '';
+        };
 
-        const statusEl = document.getElementById('modalUserStatus');
-        const banBtn = document.getElementById('modalBanBtn');
-        const banForm = document.getElementById('modalBanForm');
-        const kickForm = document.getElementById('modalKickForm');
+        window.showUserModal = function(userId) {
+            const u = userMap[userId] || {
+                id: userId, username: "", language: "Неизвестно",
+                campaigns_count: 0, total_spent: 0, is_banned: false
+            };
 
-        banForm.action = `/admin/users/${u.id}/toggle-ban?redirect_to=/admin/campaigns`;
-        kickForm.action = `/admin/users/${u.id}/kick-from-group?redirect_to=/admin/campaigns`;
+            document.getElementById('modalUserId').innerText = u.id;
+            document.getElementById('modalUserUsername').innerText = u.username ? ('@' + u.username) : '';
+            document.getElementById('modalUserLang').innerText = u.language;
+            document.getElementById('modalUserCampaigns').innerText = u.campaigns_count + ' шт.';
+            document.getElementById('modalUserSpent').innerText = u.total_spent + ' сом';
+            document.getElementById('modalUserAds').href = '/admin/campaigns?q=' + encodeURIComponent(u.id);
 
-        if (u.is_banned) {
-            statusEl.innerHTML = '<span class="badge badge-stopped"><i class="fa-solid fa-ban"></i> Заблокирован</span>';
-            banBtn.className = 'btn btn-success';
-            banBtn.innerHTML = '<i class="fa-solid fa-unlock"></i> Разблокировать в боте';
-        } else {
-            statusEl.innerHTML = '<span class="badge badge-active"><i class="fa-solid fa-user-check"></i> Активен</span>';
-            banBtn.className = 'btn btn-danger';
-            banBtn.innerHTML = '<i class="fa-solid fa-ban"></i> Заблокировать в боте';
-        }
+            const statusEl = document.getElementById('modalUserStatus');
+            const banBtn = document.getElementById('modalBanBtn');
+            const banForm = document.getElementById('modalBanForm');
+            const kickForm = document.getElementById('modalKickForm');
+            const back = encodeURIComponent(returnTo);
 
-        const modal = document.getElementById('userModal');
-        modal.style.display = 'flex';
-        document.body.style.overflow = 'hidden';
-    }
+            banForm.action = `/admin/users/${u.id}/toggle-ban?redirect_to=${back}`;
+            kickForm.action = `/admin/users/${u.id}/kick-from-group?redirect_to=${back}`;
 
-    function closeUserModal() {
-        document.getElementById('userModal').style.display = 'none';
-        document.body.style.overflow = '';
-    }
+            if (u.is_banned) {
+                statusEl.innerHTML = '<span class="badge badge-stopped"><i class="fa-solid fa-ban"></i> Заблокирован</span>';
+                banBtn.className = 'btn btn-success';
+                banBtn.innerHTML = '<i class="fa-solid fa-unlock"></i> Разблокировать в боте';
+            } else {
+                statusEl.innerHTML = '<span class="badge badge-active"><i class="fa-solid fa-user-check"></i> Активен</span>';
+                banBtn.className = 'btn btn-danger';
+                banBtn.innerHTML = '<i class="fa-solid fa-ban"></i> Заблокировать в боте';
+            }
 
-    window.onclick = function(event) {
-        const uModal = document.getElementById('userModal');
-        const iModal = document.getElementById('imageModal');
-        if (event.target === uModal) {
-            closeUserModal();
-        }
-        if (event.target === iModal) {
-            closeImageModal();
-        }
-    }
+            document.getElementById('userModal').classList.add('open');
+            document.body.style.overflow = 'hidden';
+        };
+
+        window.closeUserModal = function() {
+            document.getElementById('userModal').classList.remove('open');
+            document.body.style.overflow = '';
+        };
+    })();
 </script>
 {% endblock %}
-

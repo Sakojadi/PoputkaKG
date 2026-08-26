@@ -3,21 +3,23 @@ import logging
 import math
 import os
 import urllib.parse
+from datetime import UTC, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import delete, desc, func, or_, select
+from sqlalchemy import asc, case, delete, desc, func, or_, select
 from starlette.middleware.sessions import SessionMiddleware
 
 from bot.config import config
 from bot.database.db import AsyncSessionLocal
 from bot.database.models import Campaign, User
-from bot.handlers.ad_flow import post_ad
+from bot.handlers.ad_flow import _spawn
 from bot.services.moderation import BANNED_WORDS
-from bot.services.scheduler import scheduler
+from bot.services.scheduler import remove_campaign_job, schedule_campaign
+from bot.services.tg import get_bot
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,26 @@ app.add_middleware(
 templates = Jinja2Templates(
     directory=os.path.join(os.path.dirname(__file__), "templates")
 )
+
+# Timestamps are stored as naive UTC; the panel is operated from Kyrgyzstan, so
+# everything the admin sees (and the "today" filter) works in Bishkek local time.
+try:
+    LOCAL_TZ = ZoneInfo("Asia/Bishkek")
+except ZoneInfoNotFoundError:  # slim images without the tzdata package
+    # Kyrgyzstan has been a fixed UTC+6 with no DST since 2005.
+    LOCAL_TZ = timezone(timedelta(hours=6), "Asia/Bishkek")
+
+
+def format_local(value: datetime | None, fmt: str = "%d.%m.%Y %H:%M") -> str:
+    """Render a stored (naive UTC) timestamp in Bishkek local time."""
+    if not value:
+        return "—"
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(LOCAL_TZ).strftime(fmt)
+
+
+templates.env.filters["localdt"] = format_local
 
 
 # Helper dependency to check login
@@ -73,7 +95,7 @@ async def root():
 # --- MEDIA PROXY ROUTE ---
 @app.get("/admin/media/photo/{file_id}")
 async def get_telegram_photo(file_id: str, _=Depends(require_admin)):
-    bot = Bot(token=config.bot_token)
+    bot = get_bot()
     try:
         tg_file = await bot.get_file(file_id)
         if tg_file and tg_file.file_path:
@@ -83,8 +105,6 @@ async def get_telegram_photo(file_id: str, _=Depends(require_admin)):
     except Exception as e:
         logger.error(f"Error fetching telegram photo {file_id}: {e}")
         raise HTTPException(status_code=404, detail="Photo not found")
-    finally:
-        await bot.session.close()
 
 
 # --- AUTH ROUTES ---
@@ -119,20 +139,63 @@ async def logout(request: Request):
     return RedirectResponse(url="/admin/login")
 
 
+# --- SHARED FILTER HELPERS ---
+# Older rows may have price_paid == 0 / NULL; fall back to 1 som per publication
+# so revenue figures match what is shown per-row elsewhere in the panel.
+SPENT_EXPR = case(
+    (
+        or_(Campaign.price_paid.is_(None), Campaign.price_paid == 0),
+        func.coalesce(Campaign.publications_total, 0) * 1.0,
+    ),
+    else_=Campaign.price_paid,
+)
+
+PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90}
+
+
+def _utc_now() -> datetime:
+    """Naive UTC 'now', matching how created_at is stored on the models."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _period_start(period: str | None) -> datetime | None:
+    """Naive-UTC start of a named period, or None for 'all'.
+
+    "Today" means today in Bishkek, converted back to UTC for the comparison;
+    the rolling windows are plain durations and need no conversion.
+    """
+    if not period or period == "all":
+        return None
+    if period == "today":
+        local_midnight = datetime.now(LOCAL_TZ).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return local_midnight.astimezone(UTC).replace(tzinfo=None)
+    days = PERIOD_DAYS.get(period)
+    if not days:
+        return None
+    return _utc_now() - timedelta(days=days)
+
+
+def _filter_qs(**params) -> str:
+    """Build a querystring of the active filters (skipping defaults/empties)."""
+    parts = []
+    for key, value in params.items():
+        if value in (None, "", "all"):
+            continue
+        parts.append(f"{key}={urllib.parse.quote_plus(str(value))}")
+    return "&".join(parts)
+
+
 # --- DASHBOARD ---
 @app.get("/admin", response_class=HTMLResponse)
 async def dashboard(request: Request, _=Depends(require_admin)):
     async with AsyncSessionLocal() as session:
-        # Total revenue
-        rev_res = await session.execute(select(func.sum(Campaign.price_paid)))
-        total_revenue = rev_res.scalar() or 0.0
-
-        # If price_paid wasn't tracked for older rows, fallback to total * 1.0
-        if total_revenue == 0.0:
-            tot_res = await session.execute(
-                select(func.sum(Campaign.publications_total))
-            )
-            total_revenue = float(tot_res.scalar() or 0) * 1.0
+        # Total revenue (per-row fallback for legacy rows without price_paid)
+        rev_res = await session.execute(
+            select(func.coalesce(func.sum(SPENT_EXPR), 0.0))
+        )
+        total_revenue = float(rev_res.scalar() or 0.0)
 
         # Active campaigns
         act_res = await session.execute(
@@ -172,68 +235,130 @@ async def dashboard(request: Request, _=Depends(require_admin)):
     )
 
 
-# --- CAMPAIGNS (With Search & Pagination) ---
+# --- CAMPAIGNS (Search, Filters & Pagination) ---
 @app.get("/admin/campaigns", response_class=HTMLResponse)
 async def campaigns_page(
     request: Request,
     q: str | None = None,
+    status_filter: str = Query("all", alias="status"),
+    period: str = Query("all"),
+    photo: str = Query("all"),
+    sort: str = Query("new"),
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=100),
     msg: str | None = None,
     _=Depends(require_admin),
 ):
-    async with AsyncSessionLocal() as session:
-        base_query = select(Campaign)
-        count_query = select(func.count(Campaign.id))
+    filters = []
 
-        if q and q.strip():
-            term = q.strip()
-            if term.isdigit():
-                filt = or_(
+    if q and q.strip():
+        term = q.strip()
+        if term.isdigit():
+            filters.append(
+                or_(
                     Campaign.id == int(term),
                     Campaign.user_id == int(term),
                     Campaign.content_text.ilike(f"%{term}%"),
                 )
-            else:
-                filt = Campaign.content_text.ilike(f"%{term}%")
-            base_query = base_query.where(filt)
-            count_query = count_query.where(filt)
+            )
+        else:
+            filters.append(Campaign.content_text.ilike(f"%{term}%"))
 
-        # Count total matching items
+    if status_filter == "active":
+        filters.append(Campaign.is_active.is_(True))
+        filters.append(Campaign.publications_left > 0)
+    elif status_filter == "stopped":
+        filters.append(Campaign.is_active.is_(False))
+        filters.append(Campaign.publications_left > 0)
+    elif status_filter == "completed":
+        filters.append(Campaign.publications_left <= 0)
+
+    since = _period_start(period)
+    if since is not None:
+        filters.append(Campaign.created_at >= since)
+
+    if photo == "yes":
+        filters.append(Campaign.content_photo.is_not(None))
+        filters.append(Campaign.content_photo != "")
+    elif photo == "no":
+        filters.append(
+            or_(Campaign.content_photo.is_(None), Campaign.content_photo == "")
+        )
+
+    order_by = {
+        "new": desc(Campaign.id),
+        "old": asc(Campaign.id),
+        "price_desc": desc(Campaign.price_paid),
+        "price_asc": asc(Campaign.price_paid),
+        "left_desc": desc(Campaign.publications_left),
+        "total_desc": desc(Campaign.publications_total),
+    }.get(sort, desc(Campaign.id))
+
+    async with AsyncSessionLocal() as session:
+        base_query = select(Campaign)
+        count_query = select(func.count(Campaign.id))
+        for f in filters:
+            base_query = base_query.where(f)
+            count_query = count_query.where(f)
+
         tot_count_res = await session.execute(count_query)
         total_items = tot_count_res.scalar() or 0
         total_pages = max(1, math.ceil(total_items / limit))
         current_page = min(page, total_pages)
 
-        # Paginated items
         res = await session.execute(
-            base_query.order_by(desc(Campaign.id))
+            base_query.order_by(order_by)
             .offset((current_page - 1) * limit)
             .limit(limit)
         )
         campaigns = res.scalars().all()
 
-        # User metadata map for interactive popup
+        # Summary of the whole filtered set (not just the current page)
+        sum_query = select(
+            func.coalesce(func.sum(SPENT_EXPR), 0.0),
+            func.coalesce(func.sum(Campaign.publications_left), 0),
+        )
+        for f in filters:
+            sum_query = sum_query.where(f)
+        sum_res = await session.execute(sum_query)
+        filtered_revenue, filtered_left = sum_res.one()
+
+        # User metadata for the interactive popup (2 queries instead of N+1)
         user_ids = list({c.user_id for c in campaigns})
         user_map = {}
         if user_ids:
+            stats_res = await session.execute(
+                select(
+                    Campaign.user_id,
+                    func.count(Campaign.id),
+                    func.coalesce(func.sum(SPENT_EXPR), 0.0),
+                )
+                .where(Campaign.user_id.in_(user_ids))
+                .group_by(Campaign.user_id)
+            )
+            stats = {row[0]: (row[1], row[2]) for row in stats_res.all()}
+
             users_res = await session.execute(select(User).where(User.id.in_(user_ids)))
             for u in users_res.scalars().all():
-                c_res = await session.execute(
-                    select(Campaign).where(Campaign.user_id == u.id)
-                )
-                c_list = c_res.scalars().all()
-                spent = sum(
-                    c.price_paid or (c.publications_total * 1.0) for c in c_list
-                )
+                count, spent = stats.get(u.id, (0, 0.0))
                 user_map[u.id] = {
                     "id": u.id,
                     "username": u.username or "",
                     "language": "🇰🇬 Кыргызча" if u.language == "ky" else "🇷🇺 Русский",
                     "is_banned": getattr(u, "is_banned", False),
-                    "campaigns_count": len(c_list),
-                    "total_spent": round(spent, 2),
+                    "campaigns_count": count,
+                    "total_spent": round(spent or 0.0, 2),
                 }
+
+    filter_qs = _filter_qs(
+        q=q, status=status_filter, period=period, photo=photo, sort=sort,
+        limit=limit if limit != 10 else None,
+    )
+    active_filters = sum(
+        1
+        for v in (status_filter, period, photo)
+        if v not in (None, "", "all")
+    ) + (1 if sort != "new" else 0)
 
     return templates.TemplateResponse(
         request=request,
@@ -243,6 +368,15 @@ async def campaigns_page(
             "campaigns": campaigns,
             "user_map": user_map,
             "q": q or "",
+            "status": status_filter,
+            "period": period,
+            "photo": photo,
+            "sort": sort,
+            "limit": limit,
+            "filter_qs": filter_qs,
+            "active_filters": active_filters,
+            "filtered_revenue": round(filtered_revenue or 0.0, 2),
+            "filtered_left": filtered_left or 0,
             "page": current_page,
             "total_pages": total_pages,
             "total_items": total_items,
@@ -251,51 +385,72 @@ async def campaigns_page(
     )
 
 
+def _redirect_with_msg(redirect_to: str | None, fallback: str, msg: str):
+    """Redirect back to the exact filtered view the action was fired from."""
+    target = fallback
+    if redirect_to and redirect_to.startswith("/admin"):
+        target = redirect_to
+
+    parsed = urllib.parse.urlsplit(target)
+    params = [
+        (k, v)
+        for k, v in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        if k != "msg"
+    ]
+    params.append(("msg", msg))
+    url = urllib.parse.urlunsplit(
+        ("", "", parsed.path, urllib.parse.urlencode(params), "")
+    )
+    return RedirectResponse(url=url, status_code=302)
+
+
 @app.post("/admin/campaigns/{campaign_id}/stop")
-async def admin_stop_campaign(campaign_id: int, _=Depends(require_admin)):
+async def admin_stop_campaign(
+    campaign_id: int,
+    redirect_to: str | None = Form(None),
+    _=Depends(require_admin),
+):
     async with AsyncSessionLocal() as session:
         campaign = await session.get(Campaign, campaign_id)
         if campaign and campaign.is_active:
             campaign.is_active = False
-            if campaign.job_id:
-                try:
-                    scheduler.remove_job(campaign.job_id)
-                except Exception:
-                    pass
+            remove_campaign_job(campaign)
             await session.commit()
-    return RedirectResponse(
-        url="/admin/campaigns?msg=Объявление+успешно+остановлено", status_code=302
+    return _redirect_with_msg(
+        redirect_to, "/admin/campaigns", "Объявление успешно остановлено"
     )
 
 
 @app.post("/admin/campaigns/{campaign_id}/resume")
-async def admin_resume_campaign(campaign_id: int, _=Depends(require_admin)):
+async def admin_resume_campaign(
+    campaign_id: int,
+    redirect_to: str | None = Form(None),
+    _=Depends(require_admin),
+):
     async with AsyncSessionLocal() as session:
         campaign = await session.get(Campaign, campaign_id)
         if campaign and not campaign.is_active and campaign.publications_left > 0:
             campaign.is_active = True
-            job = scheduler.add_job(
-                post_ad,
-                "interval",
-                minutes=campaign.interval_minutes,
-                args=[campaign.user_id, campaign.id],
-            )
-            campaign.job_id = job.id
+            campaign.failure_count = 0
+            campaign.job_id = schedule_campaign(campaign)
             await session.commit()
-    return RedirectResponse(
-        url="/admin/campaigns?msg=Объявление+возобновлено", status_code=302
+    return _redirect_with_msg(
+        redirect_to, "/admin/campaigns", "Объявление возобновлено"
     )
 
 
 @app.post("/admin/campaigns/{campaign_id}/delete")
 async def admin_delete_campaign(
-    campaign_id: int, delete_from_group: bool = Form(False), _=Depends(require_admin)
+    campaign_id: int,
+    delete_from_group: bool = Form(False),
+    redirect_to: str | None = Form(None),
+    _=Depends(require_admin),
 ):
     async with AsyncSessionLocal() as session:
         campaign = await session.get(Campaign, campaign_id)
         if campaign:
             if delete_from_group:
-                bot = Bot(token=config.bot_token)
+                bot = get_bot()
                 try:
                     msg_id_list = []
                     if campaign.message_ids:
@@ -323,81 +478,138 @@ async def admin_delete_campaign(
                             )
                 except Exception as e:
                     logger.error(f"Error during group message deletion: {e}")
-                finally:
-                    await bot.session.close()
 
-            if campaign.job_id:
-                try:
-                    scheduler.remove_job(campaign.job_id)
-                except Exception:
-                    pass
+            remove_campaign_job(campaign)
 
             await session.delete(campaign)
             await session.commit()
 
     msg = (
-        "Объявление+удалено+из+базы+и+стерто+из+группы"
+        "Объявление удалено из базы и стерто из группы"
         if delete_from_group
-        else "Объявление+удалено+из+базы"
+        else "Объявление удалено из базы"
     )
-    return RedirectResponse(url=f"/admin/campaigns?msg={msg}", status_code=302)
+    return _redirect_with_msg(redirect_to, "/admin/campaigns", msg)
 
 
-# --- USERS (With Search & Pagination) ---
+# --- USERS (Search, Filters & Pagination) ---
 @app.get("/admin/users", response_class=HTMLResponse)
 async def users_page(
     request: Request,
     q: str | None = None,
+    lang: str = Query("all"),
+    status_filter: str = Query("all", alias="status"),
+    activity: str = Query("all"),
+    period: str = Query("all"),
+    sort: str = Query("new"),
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=100),
     msg: str | None = None,
     _=Depends(require_admin),
 ):
-    async with AsyncSessionLocal() as session:
-        base_query = select(User)
-        count_query = select(func.count(User.id))
+    # Per-user campaign aggregates, computed in one grouped subquery
+    agg = (
+        select(
+            Campaign.user_id.label("uid"),
+            func.count(Campaign.id).label("c_count"),
+            func.coalesce(func.sum(SPENT_EXPR), 0.0).label("spent"),
+        )
+        .group_by(Campaign.user_id)
+        .subquery()
+    )
+    c_count = func.coalesce(agg.c.c_count, 0)
+    spent = func.coalesce(agg.c.spent, 0.0)
 
-        if q and q.strip():
-            term = q.strip().lstrip("@")
-            if term.isdigit():
-                filt = or_(User.id == int(term), User.username.ilike(f"%{term}%"))
-            else:
-                filt = or_(
-                    User.username.ilike(f"%{term}%"), User.language.ilike(f"%{term}%")
-                )
-            base_query = base_query.where(filt)
-            count_query = count_query.where(filt)
+    filters = []
+
+    if q and q.strip():
+        term = q.strip().lstrip("@")
+        if term.isdigit():
+            filters.append(
+                or_(User.id == int(term), User.username.ilike(f"%{term}%"))
+            )
+        else:
+            filters.append(User.username.ilike(f"%{term}%"))
+
+    if lang in ("ru", "ky"):
+        filters.append(User.language == lang)
+
+    if status_filter == "banned":
+        filters.append(User.is_banned.is_(True))
+    elif status_filter == "active":
+        filters.append(or_(User.is_banned.is_(False), User.is_banned.is_(None)))
+
+    if activity == "customers":
+        filters.append(c_count > 0)
+    elif activity == "idle":
+        filters.append(c_count == 0)
+
+    since = _period_start(period)
+    if since is not None:
+        filters.append(User.created_at >= since)
+
+    order_by = {
+        "new": desc(User.id),
+        "old": asc(User.id),
+        "spent_desc": desc(spent),
+        "spent_asc": asc(spent),
+        "campaigns_desc": desc(c_count),
+        # Nameless accounts sort last instead of leading the list
+        "username": asc(func.lower(func.coalesce(User.username, "яяяя"))),
+    }.get(sort, desc(User.id))
+
+    async with AsyncSessionLocal() as session:
+        base_query = select(
+            User, c_count.label("c_count"), spent.label("spent")
+        ).outerjoin(agg, agg.c.uid == User.id)
+        count_query = (
+            select(func.count()).select_from(User).outerjoin(agg, agg.c.uid == User.id)
+        )
+        for f in filters:
+            base_query = base_query.where(f)
+            count_query = count_query.where(f)
 
         tot_count_res = await session.execute(count_query)
         total_items = tot_count_res.scalar() or 0
         total_pages = max(1, math.ceil(total_items / limit))
         current_page = min(page, total_pages)
 
-        usr_res = await session.execute(
-            base_query.order_by(desc(User.id))
+        rows_res = await session.execute(
+            base_query.order_by(order_by)
             .offset((current_page - 1) * limit)
             .limit(limit)
         )
-        users_raw = usr_res.scalars().all()
 
         users = []
-        for u in users_raw:
-            c_res = await session.execute(
-                select(Campaign).where(Campaign.user_id == u.id)
-            )
-            c_list = c_res.scalars().all()
-            spent = sum(c.price_paid or (c.publications_total * 1.0) for c in c_list)
-
+        for u, user_campaigns, user_spent in rows_res.all():
             users.append(
                 {
                     "id": u.id,
                     "username": u.username or "",
                     "language": u.language,
                     "is_banned": getattr(u, "is_banned", False),
-                    "campaigns_count": len(c_list),
-                    "total_spent": round(spent, 2),
+                    "campaigns_count": user_campaigns or 0,
+                    "total_spent": round(user_spent or 0.0, 2),
+                    "created_at": u.created_at,
                 }
             )
+
+        # Totals across the whole filtered set
+        sum_query = select(
+            func.coalesce(func.sum(spent), 0.0), func.coalesce(func.sum(c_count), 0)
+        ).select_from(User).outerjoin(agg, agg.c.uid == User.id)
+        for f in filters:
+            sum_query = sum_query.where(f)
+        sum_res = await session.execute(sum_query)
+        filtered_revenue, filtered_campaigns = sum_res.one()
+
+    filter_qs = _filter_qs(
+        q=q, lang=lang, status=status_filter, activity=activity, period=period,
+        sort=sort, limit=limit if limit != 10 else None,
+    )
+    active_filters = sum(
+        1 for v in (lang, status_filter, activity, period) if v not in (None, "", "all")
+    ) + (1 if sort != "new" else 0)
 
     return templates.TemplateResponse(
         request=request,
@@ -406,6 +618,16 @@ async def users_page(
             "active_page": "users",
             "users": users,
             "q": q or "",
+            "lang": lang,
+            "status": status_filter,
+            "activity": activity,
+            "period": period,
+            "sort": sort,
+            "limit": limit,
+            "filter_qs": filter_qs,
+            "active_filters": active_filters,
+            "filtered_revenue": round(filtered_revenue or 0.0, 2),
+            "filtered_campaigns": filtered_campaigns or 0,
             "page": current_page,
             "total_pages": total_pages,
             "total_items": total_items,
@@ -435,19 +657,12 @@ async def toggle_user_ban(
                 )
                 for c in c_res.scalars().all():
                     c.is_active = False
-                    if c.job_id:
-                        try:
-                            scheduler.remove_job(c.job_id)
-                        except Exception:
-                            pass
+                    remove_campaign_job(c)
 
             await session.commit()
 
-    target_url = redirect_to if redirect_to else "/admin/users"
-    sep = "&" if "?" in target_url else "?"
-    msg = f"Пользователь {user_id} {status_text}"
-    return RedirectResponse(
-        url=f"{target_url}{sep}msg={urllib.parse.quote_plus(msg)}", status_code=302
+    return _redirect_with_msg(
+        redirect_to, "/admin/users", f"Пользователь {user_id} {status_text}"
     )
 
 
@@ -459,7 +674,7 @@ async def kick_user_from_group(
     if not config.group_id:
         group_msg = "ID группы не настроен"
     else:
-        bot = Bot(token=config.bot_token)
+        bot = get_bot()
         try:
             # Kick from group (ban then unban so they are removed from group)
             await bot.ban_chat_member(chat_id=config.group_id, user_id=user_id)
@@ -468,8 +683,6 @@ async def kick_user_from_group(
         except Exception as e:
             logger.error(f"Failed to kick user {user_id} from group: {e}")
             group_msg = f"ошибка группы ({str(e)[:30]})"
-        finally:
-            await bot.session.close()
 
     # Now remove all campaigns & jobs and delete user from database list
     async with AsyncSessionLocal() as session:
@@ -478,11 +691,7 @@ async def kick_user_from_group(
             select(Campaign).where(Campaign.user_id == user_id)
         )
         for c in c_res.scalars().all():
-            if c.job_id:
-                try:
-                    scheduler.remove_job(c.job_id)
-                except Exception:
-                    pass
+            remove_campaign_job(c)
 
         # Delete user's campaigns
         await session.execute(delete(Campaign).where(Campaign.user_id == user_id))
@@ -492,11 +701,7 @@ async def kick_user_from_group(
         await session.commit()
 
     msg = f"Пользователь {user_id} {group_msg} и удален из базы пользователей"
-    target_url = redirect_to if redirect_to else "/admin/users"
-    sep = "&" if "?" in target_url else "?"
-    return RedirectResponse(
-        url=f"{target_url}{sep}msg={urllib.parse.quote_plus(msg)}", status_code=302
-    )
+    return _redirect_with_msg(redirect_to, "/admin/users", msg)
 
 
 @app.post("/admin/users/{user_id}/delete")
@@ -508,21 +713,13 @@ async def delete_user_from_db(
             select(Campaign).where(Campaign.user_id == user_id)
         )
         for c in c_res.scalars().all():
-            if c.job_id:
-                try:
-                    scheduler.remove_job(c.job_id)
-                except Exception:
-                    pass
+            remove_campaign_job(c)
         await session.execute(delete(Campaign).where(Campaign.user_id == user_id))
         await session.execute(delete(User).where(User.id == user_id))
         await session.commit()
 
     msg = f"Пользователь {user_id} удален из базы данных"
-    target_url = redirect_to if redirect_to else "/admin/users"
-    sep = "&" if "?" in target_url else "?"
-    return RedirectResponse(
-        url=f"{target_url}{sep}msg={urllib.parse.quote_plus(msg)}", status_code=302
-    )
+    return _redirect_with_msg(redirect_to, "/admin/users", msg)
 
 
 # --- BROADCAST & PROMO ---
@@ -535,14 +732,12 @@ async def broadcast_page(
         total_users = res.scalar() or 0
 
     bot_username = ""
-    bot = Bot(token=config.bot_token)
+    bot = get_bot()
     try:
         me = await bot.get_me()
         bot_username = me.username or ""
     except Exception:
         pass
-    finally:
-        await bot.session.close()
 
     return templates.TemplateResponse(
         request=request,
@@ -580,15 +775,13 @@ async def broadcast_custom_group_post(request: Request, _=Depends(require_admin)
 
     markup = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
 
-    bot = Bot(token=config.bot_token)
+    bot = get_bot()
     try:
         await bot.send_message(chat_id=config.group_id, text=text, reply_markup=markup)
         msg = f"Пост+с+{len(buttons)}+кнопками+успешно+опубликован+в+группу!"
     except Exception as e:
         logger.error(f"Failed to post custom message to group: {e}")
         msg = f"Ошибка+отправки:+{e}"
-    finally:
-        await bot.session.close()
 
     return RedirectResponse(url=f"/admin/broadcast?msg={msg}", status_code=302)
 
@@ -598,7 +791,7 @@ async def broadcast_users(
     text: str = Form(...), target_lang: str = Form("all"), _=Depends(require_admin)
 ):
     async def send_all():
-        bot = Bot(token=config.bot_token)
+        bot = get_bot()
         async with AsyncSessionLocal() as session:
             query = select(User)
             if target_lang != "all":
@@ -615,10 +808,9 @@ async def broadcast_users(
             except Exception as e:
                 logger.debug(f"Broadcast failed for user {u.id}: {e}")
 
-        await bot.session.close()
         logger.info(f"Broadcast finished. Sent to {sent_count} users.")
 
-    asyncio.create_task(send_all())
+    _spawn(send_all())
     return RedirectResponse(
         url="/admin/broadcast?msg=Рассылка+запущена+в+фоновом+режиме!", status_code=302
     )

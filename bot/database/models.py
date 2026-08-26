@@ -37,6 +37,7 @@ class Campaign(Base):
     price_paid = Column(Float, default=0.0)
     is_active = Column(Boolean, default=True)
     job_id = Column(String, nullable=True)
+    failure_count = Column(Integer, default=0)
     last_message_id = Column(BigInteger, nullable=True)
     message_ids = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.utcnow)

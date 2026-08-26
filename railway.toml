@@ -1,3 +1,8 @@
 [deploy]
-startCommand = "uv run python -m bot.main"
-restartPolicyType = "on_failure"
+# MALLOC_ARENA_MAX limits glibc's per-thread heap arenas, which otherwise let RSS
+# climb from fragmentation without ever being returned to the OS.
+startCommand = "MALLOC_ARENA_MAX=2 uv run python -m bot.main"
+healthcheckPath = "/health"
+# No restart cap: the known failure mode here is an OOM kill, and a capped policy
+# turns a self-healing bounce into permanent downtime until someone redeploys.
+restartPolicyType = "always"
