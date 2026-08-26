@@ -6,8 +6,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from bot.database.db import AsyncSessionLocal
-from bot.database.models import Payment, User
-from bot.handlers.ad_flow import AdFlow, confirm_payment
+from bot.database.models import Campaign, Payment, User
+from bot.handlers.ad_flow import (
+    AdFlow,
+    confirm_payment,
+    process_content,
+    process_content_ok,
+    process_payment,
+)
 from bot.services import fsm
 
 BASE = "https://devapi.xpay.kg"
@@ -148,7 +154,9 @@ async def test_confirm_marks_paid_and_advances_state(db, monkeypatch):
     fsm.set_dispatcher(dp)
     try:
         payment_id = await _seed_payment()
-        await fsm.get_fsm_context(555).set_state(AdFlow.waiting_payment)
+        ctx = fsm.get_fsm_context(555)
+        await ctx.set_state(AdFlow.waiting_payment)
+        await ctx.update_data(payment_db_id=payment_id)
         _mock_xpay("COMPLETED")
 
         assert await confirm_payment(payment_id) is True
@@ -207,7 +215,9 @@ async def test_confirm_advances_a_stranded_already_completed_user(db, monkeypatc
     fsm.set_dispatcher(dp)
     try:
         payment_id = await _seed_payment(status="COMPLETED")
-        await fsm.get_fsm_context(555).set_state(AdFlow.waiting_payment)
+        ctx = fsm.get_fsm_context(555)
+        await ctx.set_state(AdFlow.waiting_payment)
+        await ctx.update_data(payment_db_id=payment_id)
         route = _mock_xpay("COMPLETED")
 
         assert await confirm_payment(payment_id) is True
@@ -242,5 +252,167 @@ async def test_confirm_does_not_rewind_a_user_past_waiting_payment(db, monkeypat
             await fsm.get_fsm_context(555).get_state() == AdFlow.confirm_content.state
         )
         assert sent == [], "a user already past waiting_payment must not be re-notified"
+    finally:
+        fsm._dispatcher = None
+
+
+# --- Fakes for driving the aiogram handlers directly (no real Telegram calls) ---
+
+
+class FakeUser:
+    def __init__(self, user_id):
+        self.id = user_id
+
+
+class FakeMessage:
+    """Minimal stand-in for aiogram's Message: only the attributes/methods the
+    handlers under test actually touch."""
+
+    def __init__(self, text=None, photo=None):
+        self.text = text
+        self.caption = None
+        self.photo = photo
+
+    async def delete(self):
+        pass
+
+    async def answer(self, *args, **kwargs):
+        return FakeMessage()
+
+    async def answer_photo(self, *args, **kwargs):
+        return FakeMessage()
+
+    async def edit_text(self, *args, **kwargs):
+        pass
+
+
+class FakeCallback:
+    """Minimal stand-in for aiogram's CallbackQuery."""
+
+    def __init__(self, user_id, data=None):
+        self.from_user = FakeUser(user_id)
+        self.message = FakeMessage()
+        self.data = data
+
+    async def answer(self, *args, **kwargs):
+        pass
+
+
+@respx.mock
+async def test_full_payment_flow_links_amount_and_campaign(db, monkeypatch):
+    """Drive process_payment -> confirm_payment (as the webhook would) ->
+    process_content -> process_content_ok, and pin the money seam: the
+    Payment amount must equal count * price_per_ad, must equal what the
+    Campaign records as price_paid, and the two rows must be linked."""
+    from tests.test_xpay import login_body, qr_body, status_body, status_url
+
+    monkeypatch.setattr("bot.handlers.ad_flow._notify_paid", lambda uid, lang: None)
+
+    user_id = 777
+    async with AsyncSessionLocal() as session:
+        session.add(User(id=user_id, language="ru"))
+        await session.commit()
+
+    respx.post(LOGIN).mock(return_value=httpx.Response(200, json=login_body()))
+    respx.post(f"{BASE}/api/v1/developer/qr/get").mock(
+        return_value=httpx.Response(200, json=qr_body())
+    )
+    respx.get(status_url(qr_body()["data"]["qr_transaction_id"])).mock(
+        return_value=httpx.Response(200, json=status_body("COMPLETED"))
+    )
+
+    dp = Dispatcher()
+    fsm.set_dispatcher(dp)
+    try:
+        state = fsm.get_fsm_context(user_id)
+        await state.set_state(AdFlow.confirm_payment)
+        await state.update_data(lang="ru", count=3, interval=5)
+
+        callback = FakeCallback(user_id)
+        await process_payment(callback, state)
+
+        data = await state.get_data()
+        payment_id = data["payment_db_id"]
+        price = data["price"]
+        assert price == 3.0  # count(3) * DEFAULT_PRICE_PER_AD(1.0)
+        assert await state.get_state() == AdFlow.waiting_payment.state
+
+        # Simulate the webhook settling the payment out of band.
+        assert await confirm_payment(payment_id) is True
+        assert await state.get_state() == AdFlow.content.state
+
+        message = FakeMessage(text="Свежий чай на вынос")
+        await process_content(message, state, bot=None)
+        assert await state.get_state() == AdFlow.confirm_content.state
+
+        await process_content_ok(callback, state)
+
+        async with AsyncSessionLocal() as session:
+            payment = await session.get(Payment, payment_id)
+            camp_res = await session.execute(
+                select(Campaign).where(Campaign.user_id == user_id)
+            )
+            campaign = camp_res.scalar_one()
+
+        assert payment.amount == price
+        assert payment.amount == campaign.price_paid
+        assert payment.campaign_id == campaign.id
+    finally:
+        fsm._dispatcher = None
+
+
+@respx.mock
+async def test_paying_a_stale_qr_does_not_settle_the_newer_order(db, monkeypatch):
+    """Regression test for Fix 1: a user abandons payment #1, restarts, and is
+    now waiting on payment #2. Paying (or a webhook settling) the abandoned
+    payment #1 must NOT advance the user, since they are not waiting on it.
+
+    This must fail (advance the user) without the payment-specific guard in
+    _advance_to_content, and pass with it -- see the fix report for the
+    RED/GREEN run that proves this."""
+    sent = []
+    monkeypatch.setattr(
+        "bot.handlers.ad_flow._notify_paid", lambda uid, lang: sent.append(uid)
+    )
+    dp = Dispatcher()
+    fsm.set_dispatcher(dp)
+    try:
+        user_id = 555
+        async with AsyncSessionLocal() as session:
+            session.add(User(id=user_id, language="ru"))
+            payment_1 = Payment(
+                user_id=user_id, qr_transaction_id="tx-old", amount=100.0,
+                status="WAITING",
+            )
+            payment_2 = Payment(
+                user_id=user_id, qr_transaction_id="tx-1", amount=1000.0,
+                status="WAITING",
+            )
+            session.add_all([payment_1, payment_2])
+            await session.commit()
+            payment_1_id = payment_1.id
+            payment_2_id = payment_2.id
+
+        state = fsm.get_fsm_context(user_id)
+        await state.set_state(AdFlow.waiting_payment)
+        await state.update_data(payment_db_id=payment_2_id, price=1000.0, count=10)
+
+        from tests.test_xpay import login_body, status_body
+
+        respx.post(LOGIN).mock(return_value=httpx.Response(200, json=login_body()))
+        respx.get(f"{BASE}/api/v1/developer/qr/dynamic/status/tx-old").mock(
+            return_value=httpx.Response(200, json=status_body("COMPLETED"))
+        )
+
+        # The stale, abandoned payment #1 gets paid and settled.
+        assert await confirm_payment(payment_1_id) is True
+
+        async with AsyncSessionLocal() as session:
+            assert (await session.get(Payment, payment_1_id)).status == "COMPLETED"
+
+        # The user must NOT be advanced: they are waiting on payment #2, not #1.
+        assert await state.get_state() == AdFlow.waiting_payment.state
+        assert (await state.get_data())["payment_db_id"] == payment_2_id
+        assert sent == [], "the user must not be notified for a payment they are not waiting on"
     finally:
         fsm._dispatcher = None
