@@ -65,3 +65,23 @@ class GroupPost(Base):
     last_message_id = Column(BigInteger, nullable=True)
     message_ids = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Payment(Base):
+    """One xPay payment attempt.
+
+    Required rather than optional: the webhook arrives out of band with no
+    FSM context, so qr_transaction_id must be resolvable to a user from
+    durable storage.
+    """
+
+    __tablename__ = "payments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger)
+    qr_transaction_id = Column(String, unique=True, index=True)
+    amount = Column(Float, default=0.0)  # som, what we charged
+    status = Column(String, default="WAITING")
+    campaign_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
