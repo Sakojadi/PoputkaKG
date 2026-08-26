@@ -44,7 +44,13 @@ _background_tasks: set[asyncio.Task] = set()
 def _spawn(coro) -> asyncio.Task:
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+
+    def _done(t: asyncio.Task) -> None:
+        _background_tasks.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            logger.warning(f"Background task failed: {t.exception()}")
+
+    task.add_done_callback(_done)
     return task
 
 
@@ -381,7 +387,7 @@ def _notify_paid(user_id: int, lang: str) -> None:
     _spawn(get_bot().send_message(user_id, get_text(lang, "payment_confirmed")))
 
 
-async def _advance_to_content(user_id: int, lang: str) -> None:
+async def _advance_to_content(user_id: int, lang: str, payment_id: int) -> None:
     """Move a paid user to content entry and tell them, exactly once.
 
     Guarded on the user's current FSM state rather than the Payment row: the
@@ -389,11 +395,32 @@ async def _advance_to_content(user_id: int, lang: str) -> None:
     That makes this safe to call from the check button and from a duplicate
     webhook delivery alike -- including a webhook that lands before this
     process has a dispatcher, or after the user has already moved on.
+
+    The guard is also payment-specific: the user must be waiting on *this*
+    payment_id, not merely sitting in waiting_payment. Without that, paying
+    a stale, abandoned QR could settle it and advance a user who is actually
+    waiting on a different, newer order -- crediting them with the wrong
+    price/content and orphaning the real payment for that order.
     """
     state = get_fsm_context(user_id)
     if state is None:
+        logger.warning(
+            f"Payment {payment_id} settled for user {user_id} but no FSM context "
+            "is available (likely a process restart); the user was not advanced."
+        )
         return
     if await state.get_state() != AdFlow.waiting_payment.state:
+        logger.warning(
+            f"Payment {payment_id} settled for user {user_id} but they are no "
+            "longer waiting_payment; the user was not advanced."
+        )
+        return
+    data = await state.get_data()
+    if data.get("payment_db_id") != payment_id:
+        logger.warning(
+            f"Payment {payment_id} settled but user {user_id} is waiting on "
+            f"{data.get('payment_db_id')}"
+        )
         return
     await state.set_state(AdFlow.content)
     _notify_paid(user_id, lang)
@@ -412,7 +439,7 @@ async def confirm_payment(payment_id: int) -> bool:
             return False
         if payment.status == "COMPLETED":
             lang = await get_user_lang(payment.user_id, session)
-            await _advance_to_content(payment.user_id, lang)
+            await _advance_to_content(payment.user_id, lang, payment_id)
             return True
         qr_transaction_id = payment.qr_transaction_id
         user_id = payment.user_id
@@ -430,7 +457,7 @@ async def confirm_payment(payment_id: int) -> bool:
         if payment.status == "COMPLETED":
             # A concurrent caller (button vs webhook) already settled it.
             lang = await get_user_lang(payment.user_id, session)
-            await _advance_to_content(payment.user_id, lang)
+            await _advance_to_content(payment.user_id, lang, payment_id)
             return True
 
         payment.status = pay_status
@@ -445,7 +472,7 @@ async def confirm_payment(payment_id: int) -> bool:
 
         lang = await get_user_lang(user_id, session)
 
-    await _advance_to_content(user_id, lang)
+    await _advance_to_content(user_id, lang, payment_id)
     logger.info(f"Payment {payment_id} confirmed for user {user_id}")
     return True
 
@@ -490,15 +517,31 @@ async def process_payment(callback: CallbackQuery, state: FSMContext):
 
     # The summary message is a plain text message, so it cannot be edited
     # into a photo; delete it and send the QR image instead.
-    await callback.message.delete()
-    if qr.qr_image:
-        await callback.message.answer_photo(
-            qr.qr_image, caption=msg_text, reply_markup=markup
+    #
+    # The Payment row is already committed at this point, so nothing below
+    # may skip setting waiting_payment: if it did, the row and the FSM state
+    # would diverge, the "Check payment" button would be unreachable, and a
+    # second "Pay" press would mint a second QR for the same order.
+    try:
+        await callback.message.delete()
+        if qr.qr_image:
+            try:
+                await callback.message.answer_photo(
+                    qr.qr_image, caption=msg_text, reply_markup=markup
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to send QR photo for payment {payment_db_id}: {e}"
+                )
+                await callback.message.answer(msg_text, reply_markup=markup)
+        else:
+            await callback.message.answer(msg_text, reply_markup=markup)
+    except Exception as e:
+        logger.warning(
+            f"Failed to deliver QR message for payment {payment_db_id}: {e}"
         )
-    else:
-        await callback.message.answer(msg_text, reply_markup=markup)
-
-    await state.set_state(AdFlow.waiting_payment)
+    finally:
+        await state.set_state(AdFlow.waiting_payment)
 
 
 @router.callback_query(AdFlow.waiting_payment, F.data == "check_pay")

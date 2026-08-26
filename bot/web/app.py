@@ -99,7 +99,9 @@ def _extract_qr_transaction_id(body) -> str:
     candidate = body.get("qr_transaction_id")
     if not candidate and isinstance(body.get("data"), dict):
         candidate = body["data"].get("qr_transaction_id")
-    return str(candidate or "").strip()
+    # Unauthenticated public route: cap what we log/carry forward. Real xPay
+    # transaction ids are ~25 characters, so 128 is generous.
+    return str(candidate or "").strip()[:128]
 
 
 @app.post(WEBHOOK_PATH)
@@ -131,12 +133,13 @@ async def xpay_webhook(request: Request):
                 )
             )
             payment = result.scalar_one_or_none()
+            payment_id = payment.id if payment is not None else None
 
-        if payment is None:
+        if payment_id is None:
             logger.info(f"xPay webhook for unknown transaction {qr_transaction_id}")
             return {"status": "ok"}
 
-        await confirm_payment(payment.id)
+        await confirm_payment(payment_id)
     except Exception as e:
         logger.warning(f"xPay webhook failed for {qr_transaction_id}: {e}")
 
