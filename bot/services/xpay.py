@@ -8,6 +8,7 @@ faster than the GC returns it to the OS.
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -147,3 +148,78 @@ async def _get_auth() -> tuple[str, str]:
         _token, _service_uuid, _expires_at = await _login()
         logger.info(f"xPay token refreshed, mode={config.xpay_mode}")
         return _token, _service_uuid
+
+
+# Shown to the payer inside their banking app.
+SERVICE_NAME = "Poputka KG — реклама"
+
+
+@dataclass(frozen=True)
+class PaymentQR:
+    qr_transaction_id: str
+    qr_code: str
+    qr_image: str
+
+
+async def create_payment(user_id: int, amount_som: float) -> PaymentQR:
+    """Create a dynamic QR for one order. Raises XPayError on any failure."""
+    token, service_uuid = await _get_auth()
+
+    payload = {
+        "uuid": service_uuid,
+        # The API takes tyiyn: 100 som == 10000. This is the only place in
+        # the codebase that performs the conversion.
+        "amount": round(amount_som * 100),
+        "type": "dynamic",
+        "payer_id": str(user_id),
+        "service_name": SERVICE_NAME,
+        "comments": f"{SERVICE_NAME} ({user_id})",
+        "amount_change": False,
+        "qr_pos": False,
+    }
+
+    # No public origin means local development: xPay cannot reach us, so we
+    # omit callback_url and the flow relies on the user's check button.
+    # check_url is deliberately never sent - it blocks the payment until our
+    # server answers HTTP 201, which adds a failure mode and buys nothing.
+    base_url = config.resolved_public_base_url
+    if base_url:
+        payload["callback_url"] = f"{base_url}{WEBHOOK_PATH}"
+
+    data = await _post_json(
+        "/api/v1/developer/qr/get",
+        payload,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    qr_transaction_id = data.get("qr_transaction_id")
+    if not qr_transaction_id:
+        raise XPayError("xPay qr/get returned no qr_transaction_id")
+
+    return PaymentQR(
+        qr_transaction_id=str(qr_transaction_id),
+        qr_code=str(data.get("qr_code") or ""),
+        qr_image=str(data.get("qr_image") or ""),
+    )
+
+
+async def get_payment_status(qr_transaction_id: str) -> str:
+    """Return the current pay_status, e.g. WAITING / COMPLETED / CANCELED.
+
+    This is the only authority on whether money arrived. The webhook payload
+    is unsigned and is never trusted for this.
+    """
+    token, _ = await _get_auth()
+    path = f"/api/v1/developer/qr/dynamic/status/{qr_transaction_id}"
+    try:
+        resp = await get_client().get(
+            path, headers={"Authorization": f"Bearer {token}"}
+        )
+    except httpx.HTTPError as e:
+        raise XPayError(f"xPay request to {path} failed: {e}") from e
+
+    data = _unwrap(path, resp)
+    pay_status = data.get("pay_status")
+    if not pay_status:
+        raise XPayError(f"xPay {path} returned no pay_status")
+    return str(pay_status).upper()
