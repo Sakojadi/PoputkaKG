@@ -1,9 +1,12 @@
 import pytest
+from aiogram import Dispatcher
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from bot.database.db import AsyncSessionLocal
 from bot.database.models import Payment
+from bot.handlers.ad_flow import AdFlow
+from bot.services import fsm
 
 
 async def test_payment_row_round_trips(db):
@@ -63,3 +66,30 @@ async def test_qr_transaction_id_uniqueness(db):
                 )
             )
             await session.commit()
+
+
+async def test_no_dispatcher_yields_no_context():
+    fsm._dispatcher = None
+    assert fsm.get_fsm_context(555) is None
+
+
+async def test_registered_dispatcher_yields_a_usable_context():
+    dp = Dispatcher()
+    fsm.set_dispatcher(dp)
+    try:
+        ctx = fsm.get_fsm_context(555)
+        assert ctx is not None
+        await ctx.set_state(AdFlow.content)
+        assert await ctx.get_state() == AdFlow.content.state
+    finally:
+        fsm._dispatcher = None
+
+
+async def test_context_is_keyed_per_user():
+    dp = Dispatcher()
+    fsm.set_dispatcher(dp)
+    try:
+        await fsm.get_fsm_context(111).set_state(AdFlow.content)
+        assert await fsm.get_fsm_context(222).get_state() is None
+    finally:
+        fsm._dispatcher = None

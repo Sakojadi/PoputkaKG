@@ -9,9 +9,11 @@ from bot.config import config
 from bot.database.db import init_db
 from bot.handlers import get_handlers_router
 from bot.middlewares import BanMiddleware
+from bot.services.fsm import set_dispatcher
 from bot.services.scheduler import start_scheduler, sync_jobs_with_db
 from bot.services.settings_store import load_settings
 from bot.services.tg import close_bot, get_bot
+from bot.services.xpay import close_client as close_xpay_client
 from bot.web.app import app as fastapi_app
 
 
@@ -37,6 +39,10 @@ async def main():
         logger.debug(f"Failed to delete commands: {e}")
 
     dp = Dispatcher()
+
+    # The xPay webhook runs in the web layer and needs to move a paying
+    # user's FSM state, so the dispatcher must be reachable from there.
+    set_dispatcher(dp)
 
     # Register global BanMiddleware
     ban_middleware = BanMiddleware()
@@ -68,6 +74,7 @@ async def main():
             server.serve(),
         )
     finally:
+        await close_xpay_client()
         await close_bot()
 
 
