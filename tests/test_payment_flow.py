@@ -2,7 +2,7 @@ import httpx
 import pytest
 import respx
 from aiogram import Dispatcher
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from bot.database.db import AsyncSessionLocal
@@ -330,7 +330,9 @@ async def test_full_payment_flow_links_amount_and_campaign(db, monkeypatch):
     try:
         state = fsm.get_fsm_context(user_id)
         await state.set_state(AdFlow.confirm_payment)
-        await state.update_data(lang="ru", count=3, interval=5)
+        # price mirrors what process_interval locks in on the summary screen:
+        # count(3) * DEFAULT_PRICE_PER_AD(1.0).
+        await state.update_data(lang="ru", count=3, interval=5, price=3.0)
 
         callback = FakeCallback(user_id)
         await process_payment(callback, state)
@@ -349,6 +351,11 @@ async def test_full_payment_flow_links_amount_and_campaign(db, monkeypatch):
         await process_content(message, state, bot=None)
         assert await state.get_state() == AdFlow.confirm_content.state
 
+        # Snapshot the pre-commit data, mirroring what a second concurrent
+        # "content_ok" tap (both reading state before either commits) would
+        # see -- state.clear() below wipes it for the first tap.
+        data_snapshot = await state.get_data()
+
         await process_content_ok(callback, state)
 
         async with AsyncSessionLocal() as session:
@@ -361,6 +368,20 @@ async def test_full_payment_flow_links_amount_and_campaign(db, monkeypatch):
         assert payment.amount == price
         assert payment.amount == campaign.price_paid
         assert payment.campaign_id == campaign.id
+
+        # A double-tap on "content_ok" (laggy connection) must not mint a
+        # second campaign for the same payment.
+        await state.set_data(data_snapshot)
+        await process_content_ok(callback, state)
+        async with AsyncSessionLocal() as session:
+            camp_count = (
+                await session.execute(
+                    select(func.count(Campaign.id)).where(
+                        Campaign.user_id == user_id
+                    )
+                )
+            ).scalar()
+        assert camp_count == 1
     finally:
         fsm._dispatcher = None
 

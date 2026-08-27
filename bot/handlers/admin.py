@@ -1,7 +1,7 @@
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 
 from bot.config import config
 from bot.database.db import AsyncSessionLocal
@@ -35,12 +35,23 @@ async def cmd_admin(message: Message):
         )
         total_campaigns = total_c_result.scalar() or 0
 
-        # Calculate revenue (price per publication comes from the settings store)
-        rev_result = await session.execute(
-            select(func.sum(Campaign.publications_total))
+        # Revenue must match the dashboard's own figure: prefer each campaign's
+        # actual price_paid, and only fall back to publications * current price
+        # for legacy rows that predate that column. Using current price for
+        # every row (the old behavior) drifts from the dashboard the moment
+        # the price is ever changed.
+        price = await get_price_per_ad()
+        spent_expr = case(
+            (
+                or_(Campaign.price_paid.is_(None), Campaign.price_paid == 0),
+                func.coalesce(Campaign.publications_total, 0) * price,
+            ),
+            else_=Campaign.price_paid,
         )
-        total_publications = rev_result.scalar() or 0
-        total_revenue = total_publications * await get_price_per_ad()
+        rev_result = await session.execute(
+            select(func.coalesce(func.sum(spent_expr), 0.0))
+        )
+        total_revenue = round(rev_result.scalar() or 0.0, 2)
 
     report = (
         f"📊 <b>Admin Dashboard</b>\n\n"

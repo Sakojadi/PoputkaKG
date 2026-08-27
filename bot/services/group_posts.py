@@ -26,11 +26,16 @@ def build_group_post_markup(buttons_json: str) -> InlineKeyboardMarkup | None:
         return None
     if not rows:
         return None
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=row["text"], url=row["url"]) for row in rows]
-        ]
-    )
+    buttons = []
+    for row in rows:
+        text, url = row.get("text"), row.get("url")
+        if text and url:
+            buttons.append(InlineKeyboardButton(text=text, url=url))
+    if not buttons:
+        return None
+    # One button per row: cramming every button into a single row (the
+    # previous behavior) makes them unreadably narrow past 2-3 buttons.
+    return InlineKeyboardMarkup(inline_keyboard=[[b] for b in buttons])
 
 
 async def post_group_message(post_id: int):
@@ -103,8 +108,8 @@ async def post_group_message(post_id: int):
 
                 await session.commit()
             except Exception:
+                # The original post failure is already logged above.
                 logger.exception(
-                    f"Could not persist failure state for group post #{post_id} "
-                    f"(original error: {e})"
+                    f"Could not persist failure state for group post #{post_id}"
                 )
             return

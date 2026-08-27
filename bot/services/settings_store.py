@@ -30,14 +30,21 @@ async def get_setting(key: str, default: str | None = None) -> str | None:
 
 
 async def set_setting(key: str, value: str) -> None:
+    await set_settings({key: value})
+
+
+async def set_settings(values: dict[str, str]) -> None:
+    """Write several keys in one transaction, so related settings (e.g. a
+    password hash and its salt) can never be observed half-written."""
     async with AsyncSessionLocal() as session:
-        setting = await session.get(AppSetting, key)
-        if setting is None:
-            session.add(AppSetting(key=key, value=value))
-        else:
-            setting.value = value
+        for key, value in values.items():
+            setting = await session.get(AppSetting, key)
+            if setting is None:
+                session.add(AppSetting(key=key, value=value))
+            else:
+                setting.value = value
         await session.commit()
-    _cache[key] = value
+    _cache.update(values)
 
 
 async def get_price_per_ad() -> float:

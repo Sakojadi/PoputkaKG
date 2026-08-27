@@ -28,7 +28,12 @@ from bot.services.scheduler import (
     schedule_campaign,
     schedule_group_post,
 )
-from bot.services.settings_store import get_price_per_ad, get_setting, set_setting
+from bot.services.settings_store import (
+    get_price_per_ad,
+    get_setting,
+    set_setting,
+    set_settings,
+)
 from bot.services.tg import get_bot
 from bot.services.xpay import WEBHOOK_PATH
 
@@ -41,6 +46,7 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=config.secret_key,
     max_age=3600 * 24 * 7,  # 7 days
+    https_only=True,
 )
 
 templates = Jinja2Templates(
@@ -206,7 +212,13 @@ async def login_action(
         stored_hash = await get_setting("admin_password_hash")
         stored_salt = await get_setting("admin_password_salt")
         if stored_hash and stored_salt:
-            candidate = _hash_password(password, bytes.fromhex(stored_salt))
+            # 260k-round PBKDF2 blocks the event loop for ~100-200ms; bot/main.py
+            # runs polling and uvicorn on that same loop, so an unauthenticated
+            # flood of login attempts would stall scheduled ad posts. Run it in
+            # a worker thread.
+            candidate = await asyncio.to_thread(
+                _hash_password, password, bytes.fromhex(stored_salt)
+            )
             password_ok = secrets.compare_digest(candidate, stored_hash)
         else:
             # No password has been saved through the panel yet -- fall back to
@@ -1025,9 +1037,14 @@ async def settings_general_action(
 
     if new_password and new_password.strip():
         salt = secrets.token_bytes(16)
-        password_hash = _hash_password(new_password.strip(), salt)
-        await set_setting("admin_password_salt", salt.hex())
-        await set_setting("admin_password_hash", password_hash)
+        password_hash = await asyncio.to_thread(
+            _hash_password, new_password.strip(), salt
+        )
+        # Both keys in one transaction: a partial write (new salt, old hash)
+        # would make every future login fail with no recovery path.
+        await set_settings(
+            {"admin_password_salt": salt.hex(), "admin_password_hash": password_hash}
+        )
 
     return RedirectResponse(
         url="/admin/settings?msg=Настройки+успешно+сохранены!", status_code=302

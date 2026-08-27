@@ -40,6 +40,11 @@ MAX_CONSECUTIVE_FAILURES = 5
 # remove the posts listed here, so a truncated history leaves posts undeletable.
 MAX_TRACKED_MESSAGE_IDS = 2000
 
+# Upper bound on publications a single campaign can buy. Must stay well below
+# MAX_TRACKED_MESSAGE_IDS (or history truncates below publications_total) and
+# low enough that count * price never risks an xPay rejection on the charge.
+MAX_PUBLICATIONS = 500
+
 # asyncio only holds a weak reference to running tasks, so a fire-and-forget
 # task can be garbage collected mid-execution unless we keep it alive.
 _background_tasks: set[asyncio.Task] = set()
@@ -178,9 +183,9 @@ async def post_ad(user_id: int, campaign_id: int):
             except Exception:
                 # If the failure counter cannot be persisted, the job would retry
                 # forever again; log loudly rather than swallowing it silently.
+                # The original post failure is already logged above.
                 logger.exception(
-                    f"Could not persist failure state for campaign #{campaign_id} "
-                    f"(original error: {e})"
+                    f"Could not persist failure state for campaign #{campaign_id}"
                 )
             return
 
@@ -229,7 +234,7 @@ async def process_count(message: Message, state: FSMContext):
         return
 
     count = int(message.text.strip())
-    if count <= 0:
+    if count <= 0 or count > MAX_PUBLICATIONS:
         await message.answer(get_text(lang, "invalid_number"))
         return
 
@@ -300,6 +305,11 @@ async def process_interval(callback: CallbackQuery, state: FSMContext):
     lang = data.get("lang", "ky")
     price_per_ad = await get_price_per_ad()
     price = count * price_per_ad
+    # Lock in the quoted price now: process_payment charges this exact value
+    # rather than re-reading the live price, so an admin price change between
+    # the quote and the "Оплатить" tap cannot mint a QR for a different
+    # amount than what the user just approved.
+    await state.update_data(price=price)
 
     summary = get_text(
         lang, "summary", count=count, interval=interval, price=price,
@@ -391,6 +401,24 @@ def _notify_paid(user_id: int, lang: str) -> None:
     _spawn(get_bot().send_message(user_id, get_text(lang, "payment_confirmed")))
 
 
+def _notify_admins_stranded_payment(payment_id: int, user_id: int) -> None:
+    """Best-effort heads-up so a paid-but-stranded user isn't purely silent.
+
+    Not a substitute for a proper admin payments view (see docs/NEXT_STEPS.md
+    §3.2) -- just the minimum so the operator finds out at all.
+    """
+    if not config.admin_ids:
+        return
+    text = (
+        f"⚠️ Payment #{payment_id} from user {user_id} was completed but their "
+        "session was lost (likely a bot restart). They are stuck until you "
+        "reach out or they restart the flow with /start."
+    )
+    bot = get_bot()
+    for admin_id in config.admin_ids:
+        _spawn(bot.send_message(admin_id, text))
+
+
 async def _advance_to_content(user_id: int, lang: str, payment_id: int) -> None:
     """Move a paid user to content entry and tell them, exactly once.
 
@@ -413,11 +441,28 @@ async def _advance_to_content(user_id: int, lang: str, payment_id: int) -> None:
             "is available (likely a process restart); the user was not advanced."
         )
         return
-    if await state.get_state() != AdFlow.waiting_payment.state:
-        logger.warning(
-            f"Payment {payment_id} settled for user {user_id} but they are no "
-            "longer waiting_payment; the user was not advanced."
-        )
+    current_state = await state.get_state()
+    if current_state != AdFlow.waiting_payment.state:
+        if current_state is None:
+            # MemoryStorage lost this user's state -- almost always a mid-flow
+            # process restart, not a benign race. The Payment row is already
+            # COMPLETED at this point (set by the caller before this check),
+            # so without a heads-up the user is stuck silently: the "Check
+            # payment" button's FSM filter no longer matches their (lost)
+            # state, so it never even reaches this function again, and they
+            # just get the generic "press /start" fallback forever.
+            logger.error(
+                f"Payment {payment_id} settled for user {user_id} but their FSM "
+                "state was lost (likely a restart); they are stranded until an "
+                "admin advances them manually."
+            )
+            _notify_admins_stranded_payment(payment_id, user_id)
+        else:
+            logger.warning(
+                f"Payment {payment_id} settled for user {user_id} but they are "
+                f"no longer waiting_payment (state={current_state}); the user "
+                "was not advanced."
+            )
         return
     data = await state.get_data()
     if data.get("payment_db_id") != payment_id:
@@ -484,9 +529,11 @@ async def confirm_payment(payment_id: int) -> bool:
 @router.callback_query(AdFlow.confirm_payment, F.data == "pay_yes")
 async def process_payment(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    count = data["count"]
     lang = data.get("lang", "ky")
-    price = count * await get_price_per_ad()
+    # Charge exactly what was quoted on the summary screen, not the live
+    # price -- an admin price change in between must not mint a QR for a
+    # different amount than the user approved.
+    price = data["price"]
 
     try:
         qr = await create_payment(callback.from_user.id, price)
@@ -519,15 +566,21 @@ async def process_payment(callback: CallbackQuery, state: FSMContext):
         ]
     )
 
-    # The summary message is a plain text message, so it cannot be edited
-    # into a photo; delete it and send the QR image instead.
+    # The summary message is a plain text message, so it cannot be edited into
+    # a photo; send the QR as a new message and delete the old one after.
+    #
+    # Send first, delete second: deleting the summary first (the old order)
+    # meant that if delete() itself failed -- an old message, a permissions
+    # quirk -- the QR send below never even ran, leaving a user with a
+    # committed Payment row, no QR, and no "Check payment" button. Sending
+    # first guarantees the user gets the QR regardless of whether the old
+    # message can be cleaned up.
     #
     # The Payment row is already committed at this point, so nothing below
     # may skip setting waiting_payment: if it did, the row and the FSM state
     # would diverge, the "Check payment" button would be unreachable, and a
     # second "Pay" press would mint a second QR for the same order.
     try:
-        await callback.message.delete()
         if qr.qr_image:
             try:
                 await callback.message.answer_photo(
@@ -546,6 +599,11 @@ async def process_payment(callback: CallbackQuery, state: FSMContext):
         )
     finally:
         await state.set_state(AdFlow.waiting_payment)
+
+    try:
+        await callback.message.delete()
+    except Exception as e:
+        logger.debug(f"Failed to delete summary message for payment {payment_db_id}: {e}")
 
 
 @router.callback_query(AdFlow.waiting_payment, F.data == "check_pay")
@@ -634,7 +692,17 @@ async def process_content_ok(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     lang = data.get("lang", "ky")
 
+    payment_db_id = data.get("payment_db_id")
     async with AsyncSessionLocal() as session:
+        # A double-tap on "content_ok" (easy on a laggy connection) must not
+        # mint a second campaign for the same payment: the Payment row is the
+        # single source of truth for whether this order already has one.
+        if payment_db_id:
+            existing_payment = await session.get(Payment, payment_db_id)
+            if existing_payment and existing_payment.campaign_id:
+                await callback.answer()
+                return
+
         campaign = Campaign(
             user_id=callback.from_user.id,
             publications_total=data["count"],
@@ -648,7 +716,6 @@ async def process_content_ok(callback: CallbackQuery, state: FSMContext):
         session.add(campaign)
         await session.commit()
 
-        payment_db_id = data.get("payment_db_id")
         if payment_db_id:
             payment = await session.get(Payment, payment_db_id)
             if payment:

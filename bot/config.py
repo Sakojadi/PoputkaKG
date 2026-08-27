@@ -26,9 +26,12 @@ class Settings(BaseSettings):
     admin_ids: list[int] = []
 
     # Web Admin Dashboard Settings
+    # No defaults: a hardcoded secret/password committed to the repo would let
+    # anyone forge an admin session against any deployment that forgot to
+    # override it. Missing either must crash at startup, not silently work.
     admin_username: str = "admin"
-    admin_password: str = "admin12345"
-    secret_key: str = "secret-super-key-poputka-admin-xyz-123"
+    admin_password: str
+    secret_key: str
     port: int = 8000
 
     @field_validator("admin_ids", mode="before")
