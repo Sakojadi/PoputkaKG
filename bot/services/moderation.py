@@ -3,6 +3,7 @@ import base64
 import io
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
 from PIL import Image
@@ -284,22 +285,36 @@ def moderate_text(text: str) -> tuple[bool, str]:
     return True, ""
 
 
+MAX_OCR_IMAGE_BYTES = 8 * 1024 * 1024
+
+# asyncio.wait_for cancels the future, not the thread: a slow tesseract run keeps
+# going and keeps the decoded image alive. A small dedicated pool bounds how many
+# of those can pile up at once, instead of the default 32-worker executor.
+_ocr_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocr")
+
+
 def _extract_text_ocr(image_bytes: bytes) -> str:
     if pytesseract is None:
         return ""
     try:
-        image = Image.open(io.BytesIO(image_bytes))
-        image.thumbnail((1200, 1200))
-        return pytesseract.image_to_string(image)
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            image.thumbnail((1200, 1200))
+            return pytesseract.image_to_string(image)
     except Exception as e:
         logger.debug(f"OCR not available or failed: {e}")
         return ""
 
 
 async def moderate_image_ocr(image_bytes: bytes) -> tuple[bool, str]:
+    if len(image_bytes) > MAX_OCR_IMAGE_BYTES:
+        logger.debug("Skipping OCR: image above %s bytes", MAX_OCR_IMAGE_BYTES)
+        return True, ""
+
     try:
+        loop = asyncio.get_running_loop()
         extracted_text = await asyncio.wait_for(
-            asyncio.to_thread(_extract_text_ocr, image_bytes), timeout=2.0
+            loop.run_in_executor(_ocr_executor, _extract_text_ocr, image_bytes),
+            timeout=2.0,
         )
         if extracted_text:
             return moderate_text(extracted_text)

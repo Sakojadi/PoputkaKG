@@ -9,55 +9,60 @@
         <p>Статистика публикаций, доходов и аудитории в реальном времени</p>
     </div>
     <div>
-        <a href="/admin/broadcast" class="btn btn-primary" style="padding: 8px 14px; font-size: 13px; min-height: 40px;">
+        <a href="/admin/broadcast" class="btn btn-primary">
             <i class="fa-solid fa-bullhorn"></i> Отправить рассылку
         </a>
     </div>
 </div>
 
+<!-- Each tile opens the matching pre-filtered table -->
 <div class="stats-grid">
-    <div class="card">
+    <a href="/admin/campaigns?sort=price_desc" class="card">
         <div class="stat-card-header">
             <div class="stat-label">Общая выручка</div>
             <div class="stat-icon icon-green"><i class="fa-solid fa-money-bill-wave"></i></div>
         </div>
         <div class="stat-value">{{ total_revenue }} сом</div>
-    </div>
+        <div class="stat-link">Топ по сумме <i class="fa-solid fa-arrow-right"></i></div>
+    </a>
 
-    <div class="card">
+    <a href="/admin/campaigns?status=active" class="card">
         <div class="stat-card-header">
             <div class="stat-label">Активные объявления</div>
             <div class="stat-icon icon-blue"><i class="fa-solid fa-bolt"></i></div>
         </div>
         <div class="stat-value">{{ active_campaigns }}</div>
-    </div>
+        <div class="stat-link">Показать активные <i class="fa-solid fa-arrow-right"></i></div>
+    </a>
 
-    <div class="card">
+    <a href="/admin/campaigns?status=completed" class="card">
         <div class="stat-card-header">
             <div class="stat-label">Всего публикаций</div>
             <div class="stat-icon icon-purple"><i class="fa-solid fa-paper-plane"></i></div>
         </div>
         <div class="stat-value">{{ total_published_count }}</div>
-    </div>
+        <div class="stat-link">Завершённые кампании <i class="fa-solid fa-arrow-right"></i></div>
+    </a>
 
-    <div class="card">
+    <a href="/admin/users?sort=spent_desc" class="card">
         <div class="stat-card-header">
             <div class="stat-label">Всего пользователей</div>
             <div class="stat-icon icon-amber"><i class="fa-solid fa-users"></i></div>
         </div>
         <div class="stat-value">{{ total_users }}</div>
-    </div>
+        <div class="stat-link">Топ клиентов <i class="fa-solid fa-arrow-right"></i></div>
+    </a>
 </div>
 
 <div class="table-card">
     <div class="table-header">
         <h3>Последние заказы рекламы</h3>
-        <a href="/admin/campaigns" class="btn btn-secondary" style="font-size: 12px; padding: 6px 12px; min-height: 34px;">
-            Все объявления →
+        <a href="/admin/campaigns" class="btn btn-secondary" style="font-size: 12px; padding: 8px 12px; min-height: 38px;">
+            Все объявления <i class="fa-solid fa-arrow-right"></i>
         </a>
     </div>
     <div class="table-responsive">
-        <table>
+        <table class="data-table">
             <thead>
                 <tr>
                     <th>ID</th>
@@ -72,12 +77,27 @@
             <tbody>
                 {% for c in recent_campaigns %}
                 <tr>
-                    <td>#{{ c.id }}</td>
-                    <td><code>{{ c.user_id }}</code></td>
-                    <td><strong style="color: #34d399;">{{ c.price_paid }} сом</strong></td>
-                    <td>{{ c.publications_left }} / {{ c.publications_total }}</td>
-                    <td>{{ c.interval_minutes }} мин</td>
-                    <td>
+                    <td class="cell-head">
+                        <span>#{{ c.id }}</span>
+                        <span class="mobile-only">
+                            {% if c.is_active and c.publications_left > 0 %}
+                            <span class="badge badge-active"><i class="fa-solid fa-circle-play"></i> Активно</span>
+                            {% elif c.publications_left <= 0 %}
+                            <span class="badge badge-completed"><i class="fa-solid fa-check"></i> Завершено</span>
+                            {% else %}
+                            <span class="badge badge-stopped"><i class="fa-solid fa-circle-stop"></i> Остановлено</span>
+                            {% endif %}
+                        </span>
+                    </td>
+                    <td data-label="Пользователь">
+                        <a href="/admin/campaigns?q={{ c.user_id }}" class="user-chip" style="text-decoration: none;">
+                            <i class="fa-solid fa-user"></i> {{ c.user_id }}
+                        </a>
+                    </td>
+                    <td class="nowrap" data-label="Сумма"><strong style="color: var(--accent-emerald-text);">{{ c.price_paid }} сом</strong></td>
+                    <td class="nowrap" data-label="Публикации">{{ c.publications_left }} / {{ c.publications_total }}</td>
+                    <td class="nowrap" data-label="Интервал">{{ c.interval_minutes }} мин</td>
+                    <td class="d-none-mobile">
                         {% if c.is_active and c.publications_left > 0 %}
                         <span class="badge badge-active"><i class="fa-solid fa-circle-play"></i> Активно</span>
                         {% elif c.publications_left <= 0 %}
@@ -86,14 +106,17 @@
                         <span class="badge badge-stopped"><i class="fa-solid fa-circle-stop"></i> Остановлено</span>
                         {% endif %}
                     </td>
-                    <td style="color: var(--text-secondary); white-space: nowrap;">
-                        {{ c.created_at.strftime('%d.%m.%Y %H:%M') if c.created_at else '-' }}
+                    <td class="nowrap" data-label="Дата" style="color: var(--text-secondary);">
+                        {{ c.created_at.strftime('%d.%m.%Y %H:%M') if c.created_at else '—' }}
                     </td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="7" style="text-align: center; padding: 30px; color: var(--text-muted);">
-                        Пока нет заказов рекламы.
+                    <td colspan="7" class="cell-empty">
+                        <div class="empty-state">
+                            <i class="fa-solid fa-inbox"></i>
+                            <p>Пока нет заказов рекламы.</p>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import UTC, datetime
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -13,15 +14,53 @@ from aiogram.types import (
 
 from bot.config import config
 from bot.database.db import AsyncSessionLocal
-from bot.database.models import Campaign, User
+from bot.database.models import Campaign, Payment, User
 from bot.handlers.start import get_user_lang, main_keyboard
 from bot.locales.translations import TEXTS, get_text
+from bot.services.fsm import get_fsm_context
 from bot.services.moderation import moderate_full_content
-from bot.services.payment import check_xpay_payment, generate_xpay_link
-from bot.services.scheduler import scheduler
+from bot.services.payments import (
+    PaymentError,
+    create_payment,
+    get_payment_status,
+)
+from bot.services.scheduler import remove_campaign_job, schedule_campaign
+from bot.services.settings_store import get_price_per_ad
+from bot.services.tg import get_bot
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+# A campaign whose posts keep failing (bot kicked from the group, expired photo,
+# deleted chat) is deactivated instead of retrying forever.
+MAX_CONSECUTIVE_FAILURES = 5
+
+# Cap the stored history so the column cannot grow without bound. Must stay well
+# above any realistic publications_total: admin "delete from group" can only
+# remove the posts listed here, so a truncated history leaves posts undeletable.
+MAX_TRACKED_MESSAGE_IDS = 2000
+
+# Upper bound on publications a single campaign can buy. Must stay well below
+# MAX_TRACKED_MESSAGE_IDS (or history truncates below publications_total) and
+# low enough that count * price never risks an xPay rejection on the charge.
+MAX_PUBLICATIONS = 500
+
+# asyncio only holds a weak reference to running tasks, so a fire-and-forget
+# task can be garbage collected mid-execution unless we keep it alive.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+
+    def _done(t: asyncio.Task) -> None:
+        _background_tasks.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            logger.warning(f"Background task failed: {t.exception()}")
+
+    task.add_done_callback(_done)
+    return task
 
 
 class AdFlow(StatesGroup):
@@ -46,25 +85,27 @@ async def post_ad(user_id: int, campaign_id: int):
                 f"Aborting ad post for campaign {campaign_id}: User {user_id} is banned."
             )
             campaign.is_active = False
-            if campaign.job_id:
-                try:
-                    scheduler.remove_job(campaign.job_id)
-                except Exception:
-                    pass
+            remove_campaign_job(campaign)
             await session.commit()
             return
 
         lang = await get_user_lang(user_id, session)
         total_published = campaign.publications_total
 
-        bot = Bot(token=config.bot_token)
-        try:
-            if not config.group_id:
-                logger.error(
-                    "GROUP_ID is not configured in settings/env! Cannot post ad."
-                )
-                return
+        if not config.group_id:
+            # A missing GROUP_ID is a deployment problem, not a problem with this
+            # campaign: counting it as a failure would deactivate every active
+            # campaign at once, with publications left and no refund. Abort
+            # without touching the counter and let the job retry once the env var
+            # is restored -- retrying is cheap now that the Bot is a singleton.
+            logger.error(
+                f"Skipping ad post for campaign #{campaign_id}: "
+                "GROUP_ID is not configured in settings/env"
+            )
+            return
 
+        bot = get_bot()
+        try:
             if campaign.content_photo:
                 sent_msg = await bot.send_photo(
                     chat_id=config.group_id,
@@ -84,21 +125,18 @@ async def post_ad(user_id: int, campaign_id: int):
                     if x.strip()
                 ]
                 existing.append(str(sent_msg.message_id))
-                campaign.message_ids = ",".join(existing)
+                campaign.message_ids = ",".join(existing[-MAX_TRACKED_MESSAGE_IDS:])
 
             logger.info(
                 f"Successfully posted ad for campaign #{campaign_id} (user {user_id}) to {config.group_id}"
             )
 
             campaign.publications_left -= 1
+            campaign.failure_count = 0
 
             if campaign.publications_left <= 0:
                 campaign.is_active = False
-                if campaign.job_id:
-                    try:
-                        scheduler.remove_job(campaign.job_id)
-                    except Exception:
-                        pass
+                remove_campaign_job(campaign)
 
                 try:
                     finish_msg = get_text(lang, "ad_finished", count=total_published)
@@ -109,12 +147,47 @@ async def post_ad(user_id: int, campaign_id: int):
             await session.commit()
 
         except Exception as e:
-            logger.error(
-                f"Failed to post ad #{campaign_id} to group {config.group_id}: {e}. Ensure the bot is an Administrator in the group with permission to post messages!"
-            )
+            # The commit above is inside this try, so the failure may be the
+            # commit itself. Roll back first: writing to a session that is in a
+            # pending-rollback state raises, which would lose the failure counter
+            # as well and leave the job retrying forever.
+            try:
+                await session.rollback()
+
+                # rollback() expires every instance in the session (unconditionally,
+                # regardless of expire_on_commit), so touching the old `campaign`
+                # object would trigger a lazy refresh SELECT and raise
+                # MissingGreenlet under AsyncSession. Re-fetch instead.
+                campaign = await session.get(Campaign, campaign_id)
+                if campaign is None:
+                    return
+
+                campaign.failure_count = (campaign.failure_count or 0) + 1
+                logger.error(
+                    f"Failed to post ad #{campaign_id} to group {config.group_id} "
+                    f"(failure {campaign.failure_count}/{MAX_CONSECUTIVE_FAILURES}): {e}. "
+                    "Ensure the bot is an Administrator in the group with permission to post messages!"
+                )
+
+                if campaign.failure_count >= MAX_CONSECUTIVE_FAILURES:
+                    # Stop retrying forever: an unstoppable job keeps the scheduler
+                    # busy and rebuilds Telegram clients every interval until OOM.
+                    campaign.is_active = False
+                    remove_campaign_job(campaign)
+                    logger.error(
+                        f"Campaign #{campaign_id} deactivated after "
+                        f"{campaign.failure_count} consecutive failures."
+                    )
+
+                await session.commit()
+            except Exception:
+                # If the failure counter cannot be persisted, the job would retry
+                # forever again; log loudly rather than swallowing it silently.
+                # The original post failure is already logged above.
+                logger.exception(
+                    f"Could not persist failure state for campaign #{campaign_id}"
+                )
             return
-        finally:
-            await bot.session.close()
 
 
 AD_BUTTON_TEXTS = [TEXTS[l]["ad_button"] for l in TEXTS]
@@ -146,7 +219,8 @@ async def back_from_count(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.delete()
     await callback.message.answer(
-        get_text(lang, "welcome"), reply_markup=main_keyboard(lang)
+        get_text(lang, "welcome", price_per_ad=await get_price_per_ad()),
+        reply_markup=main_keyboard(lang),
     )
 
 
@@ -160,7 +234,7 @@ async def process_count(message: Message, state: FSMContext):
         return
 
     count = int(message.text.strip())
-    if count <= 0:
+    if count <= 0 or count > MAX_PUBLICATIONS:
         await message.answer(get_text(lang, "invalid_number"))
         return
 
@@ -229,9 +303,18 @@ async def process_interval(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     count = data["count"]
     lang = data.get("lang", "ky")
-    price = count * 1.0
+    price_per_ad = await get_price_per_ad()
+    price = count * price_per_ad
+    # Lock in the quoted price now: process_payment charges this exact value
+    # rather than re-reading the live price, so an admin price change between
+    # the quote and the "Оплатить" tap cannot mint a QR for a different
+    # amount than what the user just approved.
+    await state.update_data(price=price)
 
-    summary = get_text(lang, "summary", count=count, interval=interval, price=price)
+    summary = get_text(
+        lang, "summary", count=count, interval=interval, price=price,
+        price_per_ad=price_per_ad,
+    )
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -304,21 +387,175 @@ async def process_cancel_payment(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.delete()
     await callback.message.answer(
-        get_text(lang, "welcome"), reply_markup=main_keyboard(lang)
+        get_text(lang, "welcome", price_per_ad=await get_price_per_ad()),
+        reply_markup=main_keyboard(lang),
     )
+
+
+def _notify_paid(user_id: int, lang: str) -> None:
+    """Send the payment-confirmed message without blocking the caller.
+
+    Split out so tests can replace it, and so a webhook is not held open
+    waiting on the Telegram API.
+    """
+    _spawn(get_bot().send_message(user_id, get_text(lang, "payment_confirmed")))
+
+
+def _notify_admins_stranded_payment(payment_id: int, user_id: int) -> None:
+    """Best-effort heads-up so a paid-but-stranded user isn't purely silent.
+
+    Not a substitute for a proper admin payments view (see docs/NEXT_STEPS.md
+    §3.2) -- just the minimum so the operator finds out at all.
+    """
+    if not config.admin_ids:
+        return
+    text = (
+        f"⚠️ Payment #{payment_id} from user {user_id} was completed but their "
+        "session was lost (likely a bot restart). They are stuck until you "
+        "reach out or they restart the flow with /start."
+    )
+    bot = get_bot()
+    for admin_id in config.admin_ids:
+        _spawn(bot.send_message(admin_id, text))
+
+
+async def _advance_to_content(user_id: int, lang: str, payment_id: int) -> None:
+    """Move a paid user to content entry and tell them, exactly once.
+
+    Guarded on the user's current FSM state rather than the Payment row: the
+    row says money arrived, the state says whether the user has been told.
+    That makes this safe to call from the check button and from a duplicate
+    webhook delivery alike -- including a webhook that lands before this
+    process has a dispatcher, or after the user has already moved on.
+
+    The guard is also payment-specific: the user must be waiting on *this*
+    payment_id, not merely sitting in waiting_payment. Without that, paying
+    a stale, abandoned QR could settle it and advance a user who is actually
+    waiting on a different, newer order -- crediting them with the wrong
+    price/content and orphaning the real payment for that order.
+    """
+    state = get_fsm_context(user_id)
+    if state is None:
+        logger.warning(
+            f"Payment {payment_id} settled for user {user_id} but no FSM context "
+            "is available (likely a process restart); the user was not advanced."
+        )
+        return
+    current_state = await state.get_state()
+    if current_state != AdFlow.waiting_payment.state:
+        if current_state is None:
+            # MemoryStorage lost this user's state -- almost always a mid-flow
+            # process restart, not a benign race. The Payment row is already
+            # COMPLETED at this point (set by the caller before this check),
+            # so without a heads-up the user is stuck silently: the "Check
+            # payment" button's FSM filter no longer matches their (lost)
+            # state, so it never even reaches this function again, and they
+            # just get the generic "press /start" fallback forever.
+            logger.error(
+                f"Payment {payment_id} settled for user {user_id} but their FSM "
+                "state was lost (likely a restart); they are stranded until an "
+                "admin advances them manually."
+            )
+            _notify_admins_stranded_payment(payment_id, user_id)
+        else:
+            logger.warning(
+                f"Payment {payment_id} settled for user {user_id} but they are "
+                f"no longer waiting_payment (state={current_state}); the user "
+                "was not advanced."
+            )
+        return
+    data = await state.get_data()
+    if data.get("payment_db_id") != payment_id:
+        logger.warning(
+            f"Payment {payment_id} settled but user {user_id} is waiting on "
+            f"{data.get('payment_db_id')}"
+        )
+        return
+    await state.set_state(AdFlow.content)
+    _notify_paid(user_id, lang)
+
+
+async def confirm_payment(payment_id: int) -> bool:
+    """Settle one payment. Shared by the check button and the xPay webhook.
+
+    The webhook payload is unsigned, so it is only ever a trigger: the xPay
+    status endpoint is the sole authority on whether money arrived.
+    Idempotent, so duplicate deliveries and button/webhook races are safe.
+    """
+    async with AsyncSessionLocal() as session:
+        payment = await session.get(Payment, payment_id)
+        if payment is None:
+            return False
+        if payment.status == "COMPLETED":
+            lang = await get_user_lang(payment.user_id, session)
+            await _advance_to_content(payment.user_id, lang, payment_id)
+            return True
+        qr_transaction_id = payment.qr_transaction_id
+        user_id = payment.user_id
+
+    try:
+        pay_status = await get_payment_status(qr_transaction_id)
+    except PaymentError as e:
+        logger.warning(f"Payment status check failed for {qr_transaction_id}: {e}")
+        return False
+
+    async with AsyncSessionLocal() as session:
+        payment = await session.get(Payment, payment_id)
+        if payment is None:
+            return False
+        if payment.status == "COMPLETED":
+            # A concurrent caller (button vs webhook) already settled it.
+            lang = await get_user_lang(payment.user_id, session)
+            await _advance_to_content(payment.user_id, lang, payment_id)
+            return True
+
+        payment.status = pay_status
+        # payments.updated_at is naive UTC, matching every other timestamp in
+        # this schema and what the admin panel's format_local() assumes; strip
+        # tzinfo rather than storing an aware value.
+        payment.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        await session.commit()
+
+        if pay_status != "COMPLETED":
+            return False
+
+        lang = await get_user_lang(user_id, session)
+
+    await _advance_to_content(user_id, lang, payment_id)
+    logger.info(f"Payment {payment_id} confirmed for user {user_id}")
+    return True
 
 
 @router.callback_query(AdFlow.confirm_payment, F.data == "pay_yes")
 async def process_payment(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    count = data["count"]
     lang = data.get("lang", "ky")
-    price = count * 1.0
+    # Charge exactly what was quoted on the summary screen, not the live
+    # price -- an admin price change in between must not mint a QR for a
+    # different amount than the user approved.
+    price = data["price"]
 
-    link, payment_id = await generate_xpay_link(price)
-    await state.update_data(payment_id=payment_id)
+    try:
+        qr = await create_payment(callback.from_user.id, price)
+    except PaymentError as e:
+        logger.error(f"Failed to create payment for {callback.from_user.id}: {e}")
+        await callback.answer(get_text(lang, "payment_not_found"), show_alert=True)
+        return
 
-    msg_text = get_text(lang, "payment_info", price=price, link=link)
+    async with AsyncSessionLocal() as session:
+        payment = Payment(
+            user_id=callback.from_user.id,
+            qr_transaction_id=qr.qr_transaction_id,
+            amount=price,
+            status="WAITING",
+        )
+        session.add(payment)
+        await session.commit()
+        payment_db_id = payment.id
+
+    await state.update_data(payment_db_id=payment_db_id, price=price)
+
+    msg_text = get_text(lang, "payment_info", price=price, link=qr.qr_code)
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -329,24 +566,58 @@ async def process_payment(callback: CallbackQuery, state: FSMContext):
         ]
     )
 
-    await callback.message.edit_text(msg_text, reply_markup=markup)
-    await state.set_state(AdFlow.waiting_payment)
+    # The summary message is a plain text message, so it cannot be edited into
+    # a photo; send the QR as a new message and delete the old one after.
+    #
+    # Send first, delete second: deleting the summary first (the old order)
+    # meant that if delete() itself failed -- an old message, a permissions
+    # quirk -- the QR send below never even ran, leaving a user with a
+    # committed Payment row, no QR, and no "Check payment" button. Sending
+    # first guarantees the user gets the QR regardless of whether the old
+    # message can be cleaned up.
+    #
+    # The Payment row is already committed at this point, so nothing below
+    # may skip setting waiting_payment: if it did, the row and the FSM state
+    # would diverge, the "Check payment" button would be unreachable, and a
+    # second "Pay" press would mint a second QR for the same order.
+    try:
+        if qr.qr_image:
+            try:
+                await callback.message.answer_photo(
+                    qr.qr_image, caption=msg_text, reply_markup=markup
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to send QR photo for payment {payment_db_id}: {e}"
+                )
+                await callback.message.answer(msg_text, reply_markup=markup)
+        else:
+            await callback.message.answer(msg_text, reply_markup=markup)
+    except Exception as e:
+        logger.warning(
+            f"Failed to deliver QR message for payment {payment_db_id}: {e}"
+        )
+    finally:
+        await state.set_state(AdFlow.waiting_payment)
+
+    try:
+        await callback.message.delete()
+    except Exception as e:
+        logger.debug(f"Failed to delete summary message for payment {payment_db_id}: {e}")
 
 
 @router.callback_query(AdFlow.waiting_payment, F.data == "check_pay")
 async def check_payment_cb(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     lang = data.get("lang", "ky")
-    payment_id = data["payment_id"]
+    payment_db_id = data.get("payment_db_id")
 
-    is_paid = await check_xpay_payment(payment_id)
-    if not is_paid:
+    if payment_db_id is None or not await confirm_payment(payment_db_id):
         await callback.answer(get_text(lang, "payment_not_found"), show_alert=True)
         return
 
+    # confirm_payment already set the state and sent payment_confirmed.
     await callback.message.delete()
-    await callback.message.answer(get_text(lang, "payment_confirmed"))
-    await state.set_state(AdFlow.content)
 
 
 @router.message(AdFlow.content)
@@ -421,7 +692,17 @@ async def process_content_ok(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     lang = data.get("lang", "ky")
 
+    payment_db_id = data.get("payment_db_id")
     async with AsyncSessionLocal() as session:
+        # A double-tap on "content_ok" (easy on a laggy connection) must not
+        # mint a second campaign for the same payment: the Payment row is the
+        # single source of truth for whether this order already has one.
+        if payment_db_id:
+            existing_payment = await session.get(Payment, payment_db_id)
+            if existing_payment and existing_payment.campaign_id:
+                await callback.answer()
+                return
+
         campaign = Campaign(
             user_id=callback.from_user.id,
             publications_total=data["count"],
@@ -430,22 +711,23 @@ async def process_content_ok(callback: CallbackQuery, state: FSMContext):
             content_text=data.get("content_text"),
             content_photo=data.get("content_photo"),
             is_active=True,
+            price_paid=data.get("price", 0.0),
         )
         session.add(campaign)
         await session.commit()
 
-        job = scheduler.add_job(
-            post_ad,
-            "interval",
-            minutes=campaign.interval_minutes,
-            args=[callback.from_user.id, campaign.id],
-        )
+        if payment_db_id:
+            payment = await session.get(Payment, payment_db_id)
+            if payment:
+                payment.campaign_id = campaign.id
+                payment.updated_at = datetime.now(UTC).replace(tzinfo=None)
+                await session.commit()
 
-        campaign.job_id = job.id
+        campaign.job_id = schedule_campaign(campaign)
         session.add(campaign)
         await session.commit()
 
-    asyncio.create_task(post_ad(callback.from_user.id, campaign.id))
+    _spawn(post_ad(campaign.user_id, campaign.id))
 
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -484,11 +766,7 @@ async def stop_campaign(callback: CallbackQuery):
             and campaign.is_active
         ):
             campaign.is_active = False
-            if campaign.job_id:
-                try:
-                    scheduler.remove_job(campaign.job_id)
-                except Exception:
-                    pass
+            remove_campaign_job(campaign)
             await session.commit()
             await callback.answer(get_text(lang, "ad_stopped"), show_alert=True)
 
@@ -548,14 +826,8 @@ async def resume_campaign(callback: CallbackQuery):
                 return
 
             campaign.is_active = True
-
-            job = scheduler.add_job(
-                post_ad,
-                "interval",
-                minutes=campaign.interval_minutes,
-                args=[callback.from_user.id, campaign.id],
-            )
-            campaign.job_id = job.id
+            campaign.failure_count = 0
+            campaign.job_id = schedule_campaign(campaign)
             await session.commit()
 
             await callback.answer(get_text(lang, "ad_started"), show_alert=True)

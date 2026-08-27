@@ -32,7 +32,10 @@ async def init_db():
         "ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS price_paid FLOAT DEFAULT 0.0",
         "ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS last_message_id BIGINT",
         "ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS message_ids TEXT DEFAULT ''",
+        "ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS failure_count INTEGER DEFAULT 0",
         "ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS created_at TIMESTAMP",
+        "ALTER TABLE payments ADD COLUMN IF NOT EXISTS campaign_id INTEGER",
+        "ALTER TABLE payments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP",
     ]
 
     for sql in migrations:

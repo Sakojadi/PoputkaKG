@@ -16,6 +16,12 @@
 </div>
 {% endif %}
 
+{% if err %}
+<div class="alert alert-error">
+    <i class="fa-solid fa-circle-exclamation"></i> {{ err }}
+</div>
+{% endif %}
+
 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 20px;">
     <!-- Price & Admin Password -->
     <div class="card">
@@ -61,7 +67,7 @@
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                 <span style="color: var(--text-secondary);">Разрешенные контакты:</span>
-                <span style="font-size: 12px; color: #a78bfa;">WhatsApp, @username</span>
+                <span style="font-size: 12px; color: var(--accent-purple-text);">WhatsApp, @username</span>
             </div>
         </div>
     </div>

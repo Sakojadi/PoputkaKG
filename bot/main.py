@@ -3,13 +3,17 @@ import logging
 import sys
 
 import uvicorn
-from aiogram import Bot, Dispatcher
+from aiogram import Dispatcher
 
 from bot.config import config
 from bot.database.db import init_db
 from bot.handlers import get_handlers_router
 from bot.middlewares import BanMiddleware
-from bot.services.scheduler import start_scheduler
+from bot.services.fsm import set_dispatcher
+from bot.services.scheduler import start_scheduler, sync_jobs_with_db
+from bot.services.settings_store import load_settings
+from bot.services.tg import close_bot, get_bot
+from bot.services.xpay import close_client as close_xpay_client
 from bot.web.app import app as fastapi_app
 
 
@@ -17,13 +21,24 @@ async def main():
     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
     logger = logging.getLogger("main")
 
+    if config.payment_provider == "mock":
+        logger.warning(
+            "PAYMENT_PROVIDER=mock: payments are NOT charged or verified. "
+            "Set PAYMENT_PROVIDER=xpay to take real money."
+        )
+    else:
+        logger.info(f"Payments: xPay ({config.xpay_mode})")
+
     # Initialize DB
     await init_db()
+    await load_settings()
 
-    # Start Scheduler
+    # Start Scheduler, then drop any jobs left behind by a previous crash and
+    # restore jobs for campaigns that are still active.
     start_scheduler()
+    await sync_jobs_with_db()
 
-    bot = Bot(token=config.bot_token)
+    bot = get_bot()
 
     # Explicitly remove Telegram command menu button
     try:
@@ -32,6 +47,10 @@ async def main():
         logger.debug(f"Failed to delete commands: {e}")
 
     dp = Dispatcher()
+
+    # The xPay webhook runs in the web layer and needs to move a paying
+    # user's FSM state, so the dispatcher must be reachable from there.
+    set_dispatcher(dp)
 
     # Register global BanMiddleware
     ban_middleware = BanMiddleware()
@@ -54,7 +73,17 @@ async def main():
     logger.info(f"Starting Bot & Web Admin Panel on 0.0.0.0:{config.port}...")
 
     # Run bot polling and web server concurrently
-    await asyncio.gather(dp.start_polling(bot, handle_signals=False), server.serve())
+    try:
+        # close_bot_session=False: the Bot is a process-wide singleton shared with
+        # the scheduler and the web admin, so its lifecycle belongs to close_bot()
+        # below, not to whichever coroutine happens to finish first.
+        await asyncio.gather(
+            dp.start_polling(bot, handle_signals=False, close_bot_session=False),
+            server.serve(),
+        )
+    finally:
+        await close_xpay_client()
+        await close_bot()
 
 
 if __name__ == "__main__":

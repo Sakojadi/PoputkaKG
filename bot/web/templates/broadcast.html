@@ -66,11 +66,61 @@
                 </div>
             </div>
 
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 12px; margin-bottom: 20px;">
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label class="form-label">Количество повторов</label>
+                    <input type="number" id="repeats_total" name="repeats_total" class="form-control" min="1" max="100" value="1" required>
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label class="form-label">Интервал между повторами</label>
+                    <select id="interval_minutes" name="interval_minutes" class="form-control" disabled>
+                        <option value="5">5 минут</option>
+                        <option value="15">15 минут</option>
+                        <option value="30">30 минут</option>
+                        <option value="60" selected>1 час</option>
+                        <option value="180">3 часа</option>
+                        <option value="720">12 часов</option>
+                        <option value="1440">24 часа</option>
+                    </select>
+                </div>
+            </div>
+
             <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center; padding: 12px; min-height: 44px;">
                 <i class="fa-solid fa-paper-plane"></i> Опубликовать пост в группу
             </button>
         </form>
     </div>
+
+    <!-- 1b. Active repeating group posts -->
+    {% if active_group_posts %}
+    <div class="card">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
+            <div class="stat-icon icon-purple"><i class="fa-solid fa-repeat"></i></div>
+            <div>
+                <h3 style="font-size: 16px; font-weight: 700;">Активные повторяющиеся посты</h3>
+                <p style="font-size: 12px; color: var(--text-secondary);">Публикации, которые еще будут повторены</p>
+            </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+            {% for post in active_group_posts %}
+            <div style="background: rgba(0, 0, 0, 0.25); padding: 12px; border-radius: 12px; border: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <div style="min-width: 0; flex: 1;">
+                    <p style="font-size: 13px; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ post.text }}</p>
+                    <p style="font-size: 11px; color: var(--text-secondary);">
+                        Осталось {{ post.repeats_left }}/{{ post.repeats_total }} · каждые {{ post.interval_minutes }} мин · создан {{ post.created_at | localdt }}
+                    </p>
+                </div>
+                <form action="/admin/broadcast/group-post/{{ post.id }}/stop" method="POST" onsubmit="return confirm('Остановить этот повторяющийся пост?');">
+                    <button type="submit" class="btn btn-secondary" style="font-size: 12px; padding: 6px 12px; min-height: 32px; color: var(--accent-rose);">
+                        <i class="fa-solid fa-stop"></i> Остановить
+                    </button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
 
     <!-- 2. Direct DM Broadcast to Users -->
     <div class="card">
@@ -106,6 +156,9 @@
 </div>
 
 <script>
+// Wrapped in an IIFE: the SPA router re-inserts this script on every visit,
+// so top-level declarations would clash and DOMContentLoaded never fires again.
+(function() {
     const botUsername = "{{ bot_username }}";
     const defaultBotUrl = botUsername ? `https://t.me/${botUsername}` : "https://t.me/your_bot";
     const MAX_BUTTONS = 5;
@@ -129,7 +182,7 @@
         }
     }
 
-    function addButton(text = "", url = "") {
+    window.addButton = function(text = "", url = "") {
         const container = document.getElementById('buttonsList');
         const rows = getButtonRows();
         if (rows.length >= MAX_BUTTONS) return;
@@ -142,7 +195,7 @@
 
         div.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 11px; font-weight: 700; color: #a78bfa;">
+                <span style="font-size: 11px; font-weight: 700; color: var(--accent-purple-text);">
                     <i class="fa-solid fa-link"></i> Кнопка ${rows.length + 1}
                 </span>
                 ${rows.length > 0 ? `<button type="button" onclick="removeButton('${rowId}')" style="background: none; border: none; color: var(--accent-rose); cursor: pointer; font-size: 12px; padding: 4px 8px;"><i class="fa-solid fa-trash"></i> Удалить</button>` : ''}
@@ -157,7 +210,7 @@
         updateButtonCount();
     }
 
-    function removeButton(id) {
+    window.removeButton = function(id) {
         const el = document.getElementById(id);
         if (el) {
             el.remove();
@@ -165,13 +218,27 @@
         }
     }
 
-    function clearAll() {
+    window.clearAll = function() {
         document.getElementById('group_text').value = "";
         document.getElementById('buttonsList').innerHTML = "";
         addButton("", "");
     }
 
-    function applyTemplate(lang) {
+    function updateIntervalState() {
+        const repeatsInput = document.getElementById('repeats_total');
+        const intervalSelect = document.getElementById('interval_minutes');
+        if (!repeatsInput || !intervalSelect) return;
+        const repeats = parseInt(repeatsInput.value, 10) || 1;
+        intervalSelect.disabled = repeats <= 1;
+    }
+
+    const repeatsInputEl = document.getElementById('repeats_total');
+    if (repeatsInputEl) {
+        repeatsInputEl.addEventListener('input', updateIntervalState);
+    }
+    updateIntervalState();
+
+    window.applyTemplate = function(lang) {
         document.getElementById('buttonsList').innerHTML = "";
         if (lang === 'ky') {
             document.getElementById('group_text').value = "Сиз да реклама бергиңиз келеби? Ушул ботко жазыңыз!";
@@ -182,9 +249,9 @@
         }
     }
 
-    // Default init with 1 button
-    window.addEventListener('DOMContentLoaded', () => {
-        applyTemplate('ky');
-    });
+    // Run immediately: this script is executed after the markup is in place,
+    // both on a full page load and on an SPA swap.
+    applyTemplate('ky');
+})();
 </script>
 {% endblock %}

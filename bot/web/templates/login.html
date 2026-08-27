@@ -2,20 +2,62 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0b0f19">
+    <meta name="color-scheme" content="dark">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Poputka Admin">
     <title>Вход в панель управления | Poputka Bot</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script>
+        (function() {
+            try {
+                var stored = localStorage.getItem('poputka:theme');
+                if (stored === 'light' || stored === 'dark') {
+                    document.documentElement.dataset.theme = stored;
+                    var mc = document.querySelector('meta[name="theme-color"]');
+                    var msc = document.querySelector('meta[name="color-scheme"]');
+                    if (mc) mc.setAttribute('content', stored === 'light' ? '#f3f5fa' : '#0b0f19');
+                    if (msc) msc.setAttribute('content', stored);
+                }
+            } catch (e) {}
+        })();
+    </script>
     <style>
         :root {
             --bg-base: #0b0f19;
             --bg-card: rgba(17, 24, 39, 0.88);
-            --border: rgba(255, 255, 255, 0.1);
+            --border: rgba(var(--overlay-rgb), 0.1);
             --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
             --text-primary: #f9fafb;
             --text-secondary: #9ca3af;
+            --accent-rose-text: #fb7185;
+            --overlay-rgb: 255, 255, 255;
+        }
+
+        :root[data-theme="light"] {
+            --bg-base: #f3f5fa;
+            --bg-card: rgba(255, 255, 255, 0.9);
+            --border: rgba(15, 23, 42, 0.12);
+            --text-primary: #111827;
+            --text-secondary: #4b5563;
+            --accent-rose-text: #e11d48;
+            --overlay-rgb: 15, 23, 42;
+        }
+
+        @media (prefers-color-scheme: light) {
+            :root:not([data-theme="dark"]):not([data-theme="light"]) {
+                --bg-base: #f3f5fa;
+                --bg-card: rgba(255, 255, 255, 0.9);
+                --border: rgba(15, 23, 42, 0.12);
+                --text-primary: #111827;
+                --text-secondary: #4b5563;
+                --accent-rose-text: #e11d48;
+                --overlay-rgb: 15, 23, 42;
+            }
         }
 
         * {
@@ -35,7 +77,9 @@
             background-image: 
                 radial-gradient(at 20% 20%, rgba(59, 130, 246, 0.2) 0px, transparent 50%),
                 radial-gradient(at 80% 80%, rgba(139, 92, 246, 0.2) 0px, transparent 50%);
-            padding: 16px;
+            padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+            overscroll-behavior-y: none;
+            -webkit-text-size-adjust: 100%;
         }
 
         .login-card {
@@ -137,10 +181,29 @@
             transform: scale(0.97);
         }
 
+        .input-wrap { position: relative; }
+
+        .toggle-pass {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            border: none;
+            background: rgba(var(--overlay-rgb), 0.06);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .toggle-pass:active { transform: translateY(-50%) scale(0.92); }
+
         .error-msg {
             background: rgba(244, 63, 94, 0.15);
             border: 1px solid rgba(244, 63, 94, 0.3);
-            color: #fb7185;
+            color: var(--accent-rose-text);
             padding: 12px;
             border-radius: 10px;
             font-size: 13px;
@@ -180,17 +243,41 @@
         <form action="/admin/login" method="POST">
             <div class="form-group">
                 <label>Логин администратора</label>
-                <input type="text" name="username" placeholder="admin" required autofocus autocomplete="username">
+                <input type="text" name="username" placeholder="admin" required autofocus
+                       autocomplete="username" autocapitalize="none" autocorrect="off"
+                       spellcheck="false" enterkeyhint="next">
             </div>
             <div class="form-group">
                 <label>Пароль</label>
-                <input type="password" name="password" placeholder="••••••••" required autocomplete="current-password">
+                <div class="input-wrap">
+                    <input type="password" id="passwordField" name="password" placeholder="••••••••" required
+                           autocomplete="current-password" enterkeyhint="go" style="padding-right: 54px;">
+                    <button type="button" class="toggle-pass" id="togglePass" aria-label="Показать пароль">
+                        <i class="fa-solid fa-eye"></i>
+                    </button>
+                </div>
             </div>
             <button type="submit" class="btn-submit">
                 <i class="fa-solid fa-lock"></i> Войти в систему
             </button>
         </form>
     </div>
+
+    <script>
+        (function() {
+            const field = document.getElementById('passwordField');
+            const btn = document.getElementById('togglePass');
+            btn.addEventListener('click', () => {
+                const shown = field.type === 'text';
+                field.type = shown ? 'password' : 'text';
+                btn.innerHTML = shown
+                    ? '<i class="fa-solid fa-eye"></i>'
+                    : '<i class="fa-solid fa-eye-slash"></i>';
+                btn.setAttribute('aria-label', shown ? 'Показать пароль' : 'Скрыть пароль');
+                field.focus();
+            });
+        })();
+    </script>
 </body>
 </html>
 
