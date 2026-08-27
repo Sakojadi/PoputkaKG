@@ -43,7 +43,7 @@ async def init_db():
             async with engine.begin() as conn:
                 await conn.execute(text(sql))
         except Exception:
-            # Fallback for SQLite which doesn't support IF NOT EXISTS in ADD COLUMN
+            # Fallback for SQLite which doesnt support IF NOT EXISTS in ADD COLUMN
             if "IF NOT EXISTS" in sql:
                 clean_sql = sql.replace(" IF NOT EXISTS", "")
                 try:
