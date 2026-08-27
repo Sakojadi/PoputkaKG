@@ -21,6 +21,7 @@ from bot.database.models import Campaign, GroupPost, Payment, User
 from bot.handlers.ad_flow import _spawn, confirm_payment
 from bot.services.group_posts import build_group_post_markup
 from bot.services.moderation import BANNED_WORDS
+from bot.services.payments import is_mock
 from bot.services.scheduler import (
     remove_campaign_job,
     remove_group_post_job,
@@ -116,6 +117,12 @@ async def xpay_webhook(request: Request):
     Always returns 200 - including on internal failure - so xPay stops
     retrying. The user's "Check payment" button remains the fallback.
     """
+    # With the mock provider every status check answers COMPLETED, so an
+    # unauthenticated caller who guessed a transaction id could settle a
+    # payment. Nothing legitimate calls this route unless xPay is active.
+    if is_mock():
+        return {"status": "ok"}
+
     try:
         body = await request.json()
     except Exception:

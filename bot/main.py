@@ -21,6 +21,14 @@ async def main():
     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
     logger = logging.getLogger("main")
 
+    if config.payment_provider == "mock":
+        logger.warning(
+            "PAYMENT_PROVIDER=mock: payments are NOT charged or verified. "
+            "Set PAYMENT_PROVIDER=xpay to take real money."
+        )
+    else:
+        logger.info(f"Payments: xPay ({config.xpay_mode})")
+
     # Initialize DB
     await init_db()
     await load_settings()

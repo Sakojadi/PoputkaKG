@@ -8,10 +8,15 @@ XPAY_BASE_URLS = {
     "production": "https://api.xpay.kg",
 }
 
+# "mock" takes no money and reports every payment as paid; "xpay" is the real
+# integration, whose sandbox/production target is chosen by XPAY_MODE.
+PAYMENT_PROVIDERS = ("mock", "xpay")
+
 
 class Settings(BaseSettings):
     bot_token: str
     group_id: int | str = ""
+    payment_provider: str = "mock"
     xpay_client_id: str = ""
     xpay_client_secret: str = ""
     xpay_mode: str = "sandbox"
@@ -85,6 +90,17 @@ class Settings(BaseSettings):
             except ValueError:
                 pass
         return 8000
+
+    @field_validator("payment_provider", mode="before")
+    @classmethod
+    def parse_payment_provider(cls, v):
+        val = str(v or "mock").strip().strip("'\"").lower()
+        if val not in PAYMENT_PROVIDERS:
+            raise ValueError(
+                f"PAYMENT_PROVIDER must be one of {list(PAYMENT_PROVIDERS)}, "
+                f"got {val!r}"
+            )
+        return val
 
     @field_validator("xpay_mode", mode="before")
     @classmethod

@@ -11,9 +11,18 @@ review's word for it. Those five are real.
 
 ---
 
+> **Update — payments now default to the mock provider.**
+> `PAYMENT_PROVIDER=mock` is the shipped default: no charge, no verification,
+> every payment reports as paid. Everything in §1.1 and §1.4 below is
+> **deferred, not cancelled** — it becomes blocking again the moment anyone
+> sets `PAYMENT_PROVIDER=xpay`. Nothing else in this file is affected; §2.1
+> (the hardcoded admin secrets) is still the top priority and has nothing to
+> do with payments.
+
 ## 1. Blocked on you — nobody else can do these
 
 ### 1.1 Verify the QR amount before a single real payment ⚠️ highest stakes
+### *(deferred while `PAYMENT_PROVIDER=mock`)*
 
 The xPay API takes amounts in **tyiyn** (1 сом = 100), and we send that correctly. But the QR's
 EMV tag 54 carries the tyiyn integer verbatim: a 1.00 сом request produces `5403100`. Under a
@@ -52,8 +61,9 @@ git push -u origin fix-oom-crash
 GitHub prints a PR-creation link in the push output. (Optionally `brew install gh` for `gh pr create`.)
 
 ### 1.4 Deploy-time verification (after §2 is done)
+### *(deferred while `PAYMENT_PROVIDER=mock`; do all of it before flipping to `xpay`)*
 
-1. Set `XPAY_CLIENT_ID`, `XPAY_CLIENT_SECRET`, `XPAY_MODE=sandbox` in Railway. Leave
+1. Set `PAYMENT_PROVIDER=xpay`, `XPAY_CLIENT_ID`, `XPAY_CLIENT_SECRET`, `XPAY_MODE=sandbox` in Railway. Leave
    `PUBLIC_BASE_URL` unset so `RAILWAY_PUBLIC_DOMAIN` is used.
 2. Confirm `POST https://<domain>/api/payment/xpay/webhook` returns `{"status":"ok"}` to an
    unauthenticated `curl`. If a proxy rule intercepts it, the callback silently never fires and you

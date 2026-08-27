@@ -1,10 +1,15 @@
 import httpx
+import pytest
 import respx
 
 from bot.database.db import AsyncSessionLocal
 from bot.database.models import Payment
 from bot.services.xpay import WEBHOOK_PATH
 from bot.web.app import app, xpay_webhook
+
+# The webhook is inert under the mock provider (see test_payments_provider.py),
+# so every test here selects the real xPay path.
+pytestmark = pytest.mark.usefixtures("use_xpay")
 
 
 class FakeRequest:

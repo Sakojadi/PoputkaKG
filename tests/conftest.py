@@ -30,6 +30,31 @@ async def db():
         await conn.run_sync(Base.metadata.drop_all)
 
 
+@pytest.fixture
+def use_xpay():
+    """Select the real xPay provider for a test that mocks its HTTP calls.
+
+    The shipped default is the mock provider, so anything exercising the xPay
+    code path has to ask for it explicitly.
+    """
+    import bot.config
+
+    previous = bot.config.config.payment_provider
+    bot.config.config.payment_provider = "xpay"
+    yield
+    bot.config.config.payment_provider = previous
+
+
+@pytest.fixture
+def use_mock_payments():
+    import bot.config
+
+    previous = bot.config.config.payment_provider
+    bot.config.config.payment_provider = "mock"
+    yield
+    bot.config.config.payment_provider = previous
+
+
 @pytest.fixture(autouse=True)
 def reset_xpay_state():
     """Clear the module-level token/client cache between tests."""

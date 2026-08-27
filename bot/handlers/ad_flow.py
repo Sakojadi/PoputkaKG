@@ -19,10 +19,14 @@ from bot.handlers.start import get_user_lang, main_keyboard
 from bot.locales.translations import TEXTS, get_text
 from bot.services.fsm import get_fsm_context
 from bot.services.moderation import moderate_full_content
+from bot.services.payments import (
+    PaymentError,
+    create_payment,
+    get_payment_status,
+)
 from bot.services.scheduler import remove_campaign_job, schedule_campaign
 from bot.services.settings_store import get_price_per_ad
 from bot.services.tg import get_bot
-from bot.services.xpay import XPayError, create_payment, get_payment_status
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -446,8 +450,8 @@ async def confirm_payment(payment_id: int) -> bool:
 
     try:
         pay_status = await get_payment_status(qr_transaction_id)
-    except XPayError as e:
-        logger.warning(f"xPay status check failed for {qr_transaction_id}: {e}")
+    except PaymentError as e:
+        logger.warning(f"Payment status check failed for {qr_transaction_id}: {e}")
         return False
 
     async with AsyncSessionLocal() as session:
@@ -486,8 +490,8 @@ async def process_payment(callback: CallbackQuery, state: FSMContext):
 
     try:
         qr = await create_payment(callback.from_user.id, price)
-    except XPayError as e:
-        logger.error(f"Failed to create xPay payment for {callback.from_user.id}: {e}")
+    except PaymentError as e:
+        logger.error(f"Failed to create payment for {callback.from_user.id}: {e}")
         await callback.answer(get_text(lang, "payment_not_found"), show_alert=True)
         return
 

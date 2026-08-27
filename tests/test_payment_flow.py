@@ -19,6 +19,10 @@ from bot.services import fsm
 BASE = "https://devapi.xpay.kg"
 LOGIN = f"{BASE}/api/v1/developer/login"
 
+# These tests drive the real xPay client with its HTTP calls mocked, so they
+# have to opt out of the shipped default (the mock provider).
+pytestmark = pytest.mark.usefixtures("use_xpay")
+
 
 async def test_payment_row_round_trips(db):
     async with AsyncSessionLocal() as session:
