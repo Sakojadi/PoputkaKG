@@ -173,7 +173,10 @@ async def create_payment(user_id: int, amount_som: float) -> PaymentQR:
         "type": "dynamic",
         "payer_id": str(user_id),
         "service_name": SERVICE_NAME,
-        "comments": f"{SERVICE_NAME} ({user_id})",
+        # xPay rejects comments over 32 chars (HTTP 409); SERVICE_NAME alone
+        # already leaves little room, so keep this short and truncate as a
+        # backstop against unexpectedly long ids.
+        "comments": f"Poputka KG {user_id}"[:32],
         "amount_change": False,
         "qr_pos": False,
     }
