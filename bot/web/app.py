@@ -296,14 +296,7 @@ def _filter_qs(**params) -> str:
 # --- DASHBOARD ---
 @app.get("/admin", response_class=HTMLResponse)
 async def dashboard(request: Request, _=Depends(require_admin)):
-    price = await get_price_per_ad()
     async with AsyncSessionLocal() as session:
-        # Total revenue (per-row fallback for legacy rows without price_paid)
-        rev_res = await session.execute(
-            select(func.coalesce(func.sum(spent_expr(price)), 0.0))
-        )
-        total_revenue = float(rev_res.scalar() or 0.0)
-
         # Active campaigns
         act_res = await session.execute(
             select(func.count(Campaign.id)).where(
@@ -333,7 +326,6 @@ async def dashboard(request: Request, _=Depends(require_admin)):
         name="dashboard.html",
         context={
             "active_page": "dashboard",
-            "total_revenue": round(total_revenue, 2),
             "active_campaigns": active_campaigns,
             "total_published_count": total_published_count,
             "total_users": total_users,
@@ -422,14 +414,11 @@ async def campaigns_page(
         campaigns = res.scalars().all()
 
         # Summary of the whole filtered set (not just the current page)
-        sum_query = select(
-            func.coalesce(func.sum(spent_expr(price)), 0.0),
-            func.coalesce(func.sum(Campaign.publications_left), 0),
-        )
+        sum_query = select(func.coalesce(func.sum(Campaign.publications_left), 0))
         for f in filters:
             sum_query = sum_query.where(f)
         sum_res = await session.execute(sum_query)
-        filtered_revenue, filtered_left = sum_res.one()
+        filtered_left = sum_res.scalar()
 
         # User metadata for the interactive popup (2 queries instead of N+1)
         user_ids = list({c.user_id for c in campaigns})
@@ -483,7 +472,6 @@ async def campaigns_page(
             "limit": limit,
             "filter_qs": filter_qs,
             "active_filters": active_filters,
-            "filtered_revenue": round(filtered_revenue or 0.0, 2),
             "filtered_left": filtered_left or 0,
             "page": current_page,
             "total_pages": total_pages,
@@ -705,13 +693,15 @@ async def users_page(
             )
 
         # Totals across the whole filtered set
-        sum_query = select(
-            func.coalesce(func.sum(spent), 0.0), func.coalesce(func.sum(c_count), 0)
-        ).select_from(User).outerjoin(agg, agg.c.uid == User.id)
+        sum_query = (
+            select(func.coalesce(func.sum(c_count), 0))
+            .select_from(User)
+            .outerjoin(agg, agg.c.uid == User.id)
+        )
         for f in filters:
             sum_query = sum_query.where(f)
         sum_res = await session.execute(sum_query)
-        filtered_revenue, filtered_campaigns = sum_res.one()
+        filtered_campaigns = sum_res.scalar()
 
     filter_qs = _filter_qs(
         q=q, lang=lang, status=status_filter, activity=activity, period=period,
@@ -736,7 +726,6 @@ async def users_page(
             "limit": limit,
             "filter_qs": filter_qs,
             "active_filters": active_filters,
-            "filtered_revenue": round(filtered_revenue or 0.0, 2),
             "filtered_campaigns": filtered_campaigns or 0,
             "page": current_page,
             "total_pages": total_pages,

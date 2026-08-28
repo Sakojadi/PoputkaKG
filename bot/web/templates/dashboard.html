@@ -6,7 +6,7 @@
 <div class="page-header">
     <div class="page-title">
         <h2>Обзор и Аналитика</h2>
-        <p>Статистика публикаций, доходов и аудитории в реальном времени</p>
+        <p>Статистика публикаций и аудитории в реальном времени</p>
     </div>
     <div>
         <a href="/admin/broadcast" class="btn btn-primary">
@@ -17,15 +17,6 @@
 
 <!-- Each tile opens the matching pre-filtered table -->
 <div class="stats-grid">
-    <a href="/admin/campaigns?sort=price_desc" class="card">
-        <div class="stat-card-header">
-            <div class="stat-label">Общая выручка</div>
-            <div class="stat-icon icon-green"><i class="fa-solid fa-money-bill-wave"></i></div>
-        </div>
-        <div class="stat-value">{{ total_revenue }} сом</div>
-        <div class="stat-link">Топ по сумме <i class="fa-solid fa-arrow-right"></i></div>
-    </a>
-
     <a href="/admin/campaigns?status=active" class="card">
         <div class="stat-card-header">
             <div class="stat-label">Активные объявления</div>
