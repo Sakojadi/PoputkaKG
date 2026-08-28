@@ -80,5 +80,13 @@ class Payment(Base):
     qr_transaction_id = Column(String, unique=True, index=True)
     status = Column(String, default="WAITING")
     campaign_id = Column(Integer, nullable=True)
+    # Snapshot of the FSM data needed to build the Campaign once content is
+    # submitted. FSM state lives only in memory, so if the process restarts
+    # after payment but before the campaign is created, this is what lets a
+    # returning user recover with /start instead of the payment being
+    # stranded -- see _find_recoverable_payment in bot/handlers/start.py.
+    publications_count = Column(Integer, nullable=True)
+    interval_minutes = Column(Integer, nullable=True)
+    lang = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)

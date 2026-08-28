@@ -35,6 +35,9 @@ async def init_db():
         "ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS created_at TIMESTAMP",
         "ALTER TABLE payments ADD COLUMN IF NOT EXISTS campaign_id INTEGER",
         "ALTER TABLE payments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP",
+        "ALTER TABLE payments ADD COLUMN IF NOT EXISTS publications_count INTEGER",
+        "ALTER TABLE payments ADD COLUMN IF NOT EXISTS interval_minutes INTEGER",
+        "ALTER TABLE payments ADD COLUMN IF NOT EXISTS lang VARCHAR",
         # Money amounts are no longer tracked in the DB -- only the xPay
         # transaction id. Drop the columns from older databases that still
         # have them.

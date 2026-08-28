@@ -547,6 +547,9 @@ async def process_payment(callback: CallbackQuery, state: FSMContext):
             user_id=callback.from_user.id,
             qr_transaction_id=qr.qr_transaction_id,
             status="WAITING",
+            publications_count=data["count"],
+            interval_minutes=data["interval"],
+            lang=lang,
         )
         session.add(payment)
         await session.commit()
