@@ -904,15 +904,30 @@ async def broadcast_custom_group_post(request: Request, _=Depends(require_admin)
             if len(buttons) >= 5:
                 break
 
+    pin_message = form_data.get("pin_message") == "on"
+
     markup = build_group_post_markup(json.dumps(buttons))
 
     bot = get_bot()
     try:
-        await bot.send_message(chat_id=config.group_id, text=text, reply_markup=markup)
+        sent_msg = await bot.send_message(
+            chat_id=config.group_id, text=text, reply_markup=markup
+        )
     except Exception as e:
         logger.error(f"Failed to post custom message to group: {e}")
         msg = f"Ошибка+отправки:+{e}"
         return RedirectResponse(url=f"/admin/broadcast?msg={msg}", status_code=302)
+
+    if pin_message:
+        try:
+            await bot.pin_chat_message(
+                chat_id=config.group_id, message_id=sent_msg.message_id
+            )
+        except Exception as e:
+            # Pinning is a nice-to-have on top of a post that already sent
+            # successfully: a permissions error here shouldn't look like the
+            # whole publish failed.
+            logger.error(f"Failed to pin group post message: {e}")
 
     repeats_left = repeats_total - 1
     async with AsyncSessionLocal() as session:
