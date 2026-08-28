@@ -27,9 +27,7 @@ class FakeRequest:
 
 async def _seed(qr_id="tx-1", status="WAITING"):
     async with AsyncSessionLocal() as session:
-        payment = Payment(
-            user_id=555, qr_transaction_id=qr_id, amount=100.0, status=status
-        )
+        payment = Payment(user_id=555, qr_transaction_id=qr_id, status=status)
         session.add(payment)
         await session.commit()
         return payment.id

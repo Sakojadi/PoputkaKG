@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import asc, case, delete, desc, func, or_, select
+from sqlalchemy import asc, delete, desc, func, or_, select
 from starlette.middleware.sessions import SessionMiddleware
 
 from bot.config import config
@@ -28,12 +28,7 @@ from bot.services.scheduler import (
     schedule_campaign,
     schedule_group_post,
 )
-from bot.services.settings_store import (
-    get_price_per_ad,
-    get_setting,
-    set_setting,
-    set_settings,
-)
+from bot.services.settings_store import get_setting, set_settings
 from bot.services.tg import get_bot
 from bot.services.xpay import WEBHOOK_PATH
 
@@ -244,18 +239,6 @@ async def logout(request: Request):
 
 
 # --- SHARED FILTER HELPERS ---
-# Older rows may have price_paid == 0 / NULL; fall back to the configured
-# price per publication so revenue figures match what is shown per-row
-# elsewhere in the panel.
-def spent_expr(price: float):
-    return case(
-        (
-            or_(Campaign.price_paid.is_(None), Campaign.price_paid == 0),
-            func.coalesce(Campaign.publications_total, 0) * price,
-        ),
-        else_=Campaign.price_paid,
-    )
-
 PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90}
 
 
@@ -387,13 +370,10 @@ async def campaigns_page(
     order_by = {
         "new": desc(Campaign.id),
         "old": asc(Campaign.id),
-        "price_desc": desc(Campaign.price_paid),
-        "price_asc": asc(Campaign.price_paid),
         "left_desc": desc(Campaign.publications_left),
         "total_desc": desc(Campaign.publications_total),
     }.get(sort, desc(Campaign.id))
 
-    price = await get_price_per_ad()
     async with AsyncSessionLocal() as session:
         base_query = select(Campaign)
         count_query = select(func.count(Campaign.id))
@@ -425,26 +405,20 @@ async def campaigns_page(
         user_map = {}
         if user_ids:
             stats_res = await session.execute(
-                select(
-                    Campaign.user_id,
-                    func.count(Campaign.id),
-                    func.coalesce(func.sum(spent_expr(price)), 0.0),
-                )
+                select(Campaign.user_id, func.count(Campaign.id))
                 .where(Campaign.user_id.in_(user_ids))
                 .group_by(Campaign.user_id)
             )
-            stats = {row[0]: (row[1], row[2]) for row in stats_res.all()}
+            stats = dict(stats_res.all())
 
             users_res = await session.execute(select(User).where(User.id.in_(user_ids)))
             for u in users_res.scalars().all():
-                count, spent = stats.get(u.id, (0, 0.0))
                 user_map[u.id] = {
                     "id": u.id,
                     "username": u.username or "",
                     "language": "🇰🇬 Кыргызча" if u.language == "ky" else "🇷🇺 Русский",
                     "is_banned": getattr(u, "is_banned", False),
-                    "campaigns_count": count,
-                    "total_spent": round(spent or 0.0, 2),
+                    "campaigns_count": stats.get(u.id, 0),
                 }
 
     filter_qs = _filter_qs(
@@ -603,20 +577,16 @@ async def users_page(
     msg: str | None = None,
     _=Depends(require_admin),
 ):
-    price = await get_price_per_ad()
-
     # Per-user campaign aggregates, computed in one grouped subquery
     agg = (
         select(
             Campaign.user_id.label("uid"),
             func.count(Campaign.id).label("c_count"),
-            func.coalesce(func.sum(spent_expr(price)), 0.0).label("spent"),
         )
         .group_by(Campaign.user_id)
         .subquery()
     )
     c_count = func.coalesce(agg.c.c_count, 0)
-    spent = func.coalesce(agg.c.spent, 0.0)
 
     filters = []
 
@@ -649,17 +619,15 @@ async def users_page(
     order_by = {
         "new": desc(User.id),
         "old": asc(User.id),
-        "spent_desc": desc(spent),
-        "spent_asc": asc(spent),
         "campaigns_desc": desc(c_count),
         # Nameless accounts sort last instead of leading the list
         "username": asc(func.lower(func.coalesce(User.username, "яяяя"))),
     }.get(sort, desc(User.id))
 
     async with AsyncSessionLocal() as session:
-        base_query = select(
-            User, c_count.label("c_count"), spent.label("spent")
-        ).outerjoin(agg, agg.c.uid == User.id)
+        base_query = select(User, c_count.label("c_count")).outerjoin(
+            agg, agg.c.uid == User.id
+        )
         count_query = (
             select(func.count()).select_from(User).outerjoin(agg, agg.c.uid == User.id)
         )
@@ -679,7 +647,7 @@ async def users_page(
         )
 
         users = []
-        for u, user_campaigns, user_spent in rows_res.all():
+        for u, user_campaigns in rows_res.all():
             users.append(
                 {
                     "id": u.id,
@@ -687,7 +655,6 @@ async def users_page(
                     "language": u.language,
                     "is_banned": getattr(u, "is_banned", False),
                     "campaigns_count": user_campaigns or 0,
-                    "total_spent": round(user_spent or 0.0, 2),
                     "created_at": u.created_at,
                 }
             )
@@ -1002,9 +969,6 @@ async def broadcast_users(
 
 
 # --- SETTINGS ---
-MAX_PRICE_PER_AD = 100_000
-
-
 @app.get("/admin/settings", response_class=HTMLResponse)
 async def settings_page(
     request: Request,
@@ -1017,7 +981,6 @@ async def settings_page(
         name="settings.html",
         context={
             "active_page": "settings",
-            "price_per_ad": await get_price_per_ad(),
             "banned_words_count": len(BANNED_WORDS),
             "msg": msg,
             "err": err,
@@ -1027,18 +990,9 @@ async def settings_page(
 
 @app.post("/admin/settings/general")
 async def settings_general_action(
-    price_per_ad: float = Form(...),
     new_password: str | None = Form(None),
     _=Depends(require_admin),
 ):
-    if price_per_ad <= 0 or price_per_ad > MAX_PRICE_PER_AD:
-        return RedirectResponse(
-            url="/admin/settings?err=Некорректная+цена+публикации",
-            status_code=302,
-        )
-
-    await set_setting("price_per_ad", str(price_per_ad))
-
     if new_password and new_password.strip():
         salt = secrets.token_bytes(16)
         password_hash = await asyncio.to_thread(

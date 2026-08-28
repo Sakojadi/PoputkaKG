@@ -124,8 +124,6 @@
                 <select name="sort" id="uSort" class="form-control">
                     <option value="new" {% if sort == 'new' %}selected{% endif %}>Сначала новые</option>
                     <option value="old" {% if sort == 'old' %}selected{% endif %}>Сначала старые</option>
-                    <option value="spent_desc" {% if sort == 'spent_desc' %}selected{% endif %}>Больше потратили</option>
-                    <option value="spent_asc" {% if sort == 'spent_asc' %}selected{% endif %}>Меньше потратили</option>
                     <option value="campaigns_desc" {% if sort == 'campaigns_desc' %}selected{% endif %}>Больше объявлений</option>
                     <option value="username" {% if sort == 'username' %}selected{% endif %}>По username (А-Я)</option>
                 </select>
@@ -186,7 +184,6 @@
                     <th>Username</th>
                     <th>Язык</th>
                     <th>Объявлений</th>
-                    <th>Потрачено</th>
                     <th>Регистрация</th>
                     <th>Статус в боте</th>
                     <th>Управление</th>
@@ -219,7 +216,6 @@
                         {% if u.language == 'ky' %}🇰🇬 Кыргызча{% else %}🇷🇺 Русский{% endif %}
                     </td>
                     <td data-label="Объявлений">{{ u.campaigns_count }}</td>
-                    <td class="nowrap" data-label="Потрачено"><strong style="color: var(--accent-emerald-text);">{{ u.total_spent }} сом</strong></td>
                     <td class="nowrap" data-label="Регистрация" style="color: var(--text-secondary);">
                         {{ u.created_at.strftime('%d.%m.%Y') if u.created_at else '—' }}
                     </td>
@@ -260,7 +256,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="8" class="cell-empty">
+                    <td colspan="7" class="cell-empty">
                         <div class="empty-state">
                             <i class="fa-solid fa-user-slash"></i>
                             <p>

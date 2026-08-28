@@ -35,13 +35,13 @@
         <div class="stat-link">Завершённые кампании <i class="fa-solid fa-arrow-right"></i></div>
     </a>
 
-    <a href="/admin/users?sort=spent_desc" class="card">
+    <a href="/admin/users" class="card">
         <div class="stat-card-header">
             <div class="stat-label">Всего пользователей</div>
             <div class="stat-icon icon-amber"><i class="fa-solid fa-users"></i></div>
         </div>
         <div class="stat-value">{{ total_users }}</div>
-        <div class="stat-link">Топ клиентов <i class="fa-solid fa-arrow-right"></i></div>
+        <div class="stat-link">Все пользователи <i class="fa-solid fa-arrow-right"></i></div>
     </a>
 </div>
 
@@ -58,7 +58,6 @@
                 <tr>
                     <th>ID</th>
                     <th>Пользователь</th>
-                    <th>Сумма</th>
                     <th>Осталось / Всего</th>
                     <th>Интервал</th>
                     <th>Статус</th>
@@ -85,7 +84,6 @@
                             <i class="fa-solid fa-user"></i> {{ c.user_id }}
                         </a>
                     </td>
-                    <td class="nowrap" data-label="Сумма"><strong style="color: var(--accent-emerald-text);">{{ c.price_paid }} сом</strong></td>
                     <td class="nowrap" data-label="Публикации">{{ c.publications_left }} / {{ c.publications_total }}</td>
                     <td class="nowrap" data-label="Интервал">{{ c.interval_minutes }} мин</td>
                     <td class="d-none-mobile">
@@ -103,7 +101,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="7" class="cell-empty">
+                    <td colspan="6" class="cell-empty">
                         <div class="empty-state">
                             <i class="fa-solid fa-inbox"></i>
                             <p>Пока нет заказов рекламы.</p>

@@ -65,7 +65,6 @@ async def test_webhook_is_inert_under_the_mock_provider(db, use_mock_payments):
         payment = Payment(
             user_id=1,
             qr_transaction_id="mock-guessable",
-            amount=100.0,
             status="WAITING",
         )
         session.add(payment)

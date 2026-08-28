@@ -30,7 +30,6 @@ async def test_payment_row_round_trips(db):
             Payment(
                 user_id=555,
                 qr_transaction_id="1770634567jZXWF3UsNotJyGu",
-                amount=100.0,
                 status="WAITING",
             )
         )
@@ -45,7 +44,6 @@ async def test_payment_row_round_trips(db):
         payment = result.scalar_one()
 
     assert payment.user_id == 555
-    assert payment.amount == 100.0
     assert payment.status == "WAITING"
     assert payment.campaign_id is None
     assert payment.created_at is not None
@@ -62,7 +60,6 @@ async def test_qr_transaction_id_uniqueness(db):
             Payment(
                 user_id=111,
                 qr_transaction_id=qr_id,
-                amount=50.0,
                 status="WAITING",
             )
         )
@@ -76,7 +73,6 @@ async def test_qr_transaction_id_uniqueness(db):
                 Payment(
                     user_id=222,
                     qr_transaction_id=qr_id,
-                    amount=75.0,
                     status="WAITING",
                 )
             )
@@ -113,9 +109,7 @@ async def test_context_is_keyed_per_user():
 async def _seed_payment(qr_id="tx-1", status="WAITING", user_id=555):
     async with AsyncSessionLocal() as session:
         session.add(User(id=user_id, language="ru"))
-        payment = Payment(
-            user_id=user_id, qr_transaction_id=qr_id, amount=100.0, status=status
-        )
+        payment = Payment(user_id=user_id, qr_transaction_id=qr_id, status=status)
         session.add(payment)
         await session.commit()
         return payment.id
@@ -303,11 +297,11 @@ class FakeCallback:
 
 
 @respx.mock
-async def test_full_payment_flow_links_amount_and_campaign(db, monkeypatch):
+async def test_full_payment_flow_links_payment_and_campaign(db, monkeypatch):
     """Drive process_payment -> confirm_payment (as the webhook would) ->
-    process_content -> process_content_ok, and pin the money seam: the
-    Payment amount must equal count * price_per_ad, must equal what the
-    Campaign records as price_paid, and the two rows must be linked."""
+    process_content -> process_content_ok, and pin the seam: the Payment row
+    must end up linked to the resulting Campaign (no money is tracked in the
+    DB -- only the xPay transaction id)."""
     from tests.test_xpay import login_body, qr_body, status_body, status_url
 
     monkeypatch.setattr("bot.handlers.ad_flow._notify_paid", lambda uid, lang: None)
@@ -365,8 +359,6 @@ async def test_full_payment_flow_links_amount_and_campaign(db, monkeypatch):
             )
             campaign = camp_res.scalar_one()
 
-        assert payment.amount == price
-        assert payment.amount == campaign.price_paid
         assert payment.campaign_id == campaign.id
 
         # A double-tap on "content_ok" (laggy connection) must not mint a
@@ -406,12 +398,10 @@ async def test_paying_a_stale_qr_does_not_settle_the_newer_order(db, monkeypatch
         async with AsyncSessionLocal() as session:
             session.add(User(id=user_id, language="ru"))
             payment_1 = Payment(
-                user_id=user_id, qr_transaction_id="tx-old", amount=100.0,
-                status="WAITING",
+                user_id=user_id, qr_transaction_id="tx-old", status="WAITING",
             )
             payment_2 = Payment(
-                user_id=user_id, qr_transaction_id="tx-1", amount=1000.0,
-                status="WAITING",
+                user_id=user_id, qr_transaction_id="tx-1", status="WAITING",
             )
             session.add_all([payment_1, payment_2])
             await session.commit()

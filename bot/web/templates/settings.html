@@ -6,7 +6,7 @@
 <div class="page-header">
     <div class="page-title">
         <h2>Настройки системы</h2>
-        <p>Параметры стоимости, пароль администратора и фильтры модерации</p>
+        <p>Пароль администратора и фильтры модерации</p>
     </div>
 </div>
 
@@ -23,18 +23,13 @@
 {% endif %}
 
 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 20px;">
-    <!-- Price & Admin Password -->
+    <!-- Admin Password -->
     <div class="card">
         <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 20px;">
-            <i class="fa-solid fa-shield-halved" style="color: var(--accent-primary);"></i> Доступ и Тарифы
+            <i class="fa-solid fa-shield-halved" style="color: var(--accent-primary);"></i> Доступ
         </h3>
 
         <form action="/admin/settings/general" method="POST">
-            <div class="form-group">
-                <label class="form-label">Стоимость 1 публикации (в сомах)</label>
-                <input type="number" step="0.1" name="price_per_ad" value="{{ price_per_ad }}" class="form-control" required style="min-height: 44px;">
-            </div>
-
             <div class="form-group">
                 <label class="form-label">Новый пароль администратора</label>
                 <input type="password" name="new_password" placeholder="Оставьте пустым, если не меняете" class="form-control" style="min-height: 44px;">

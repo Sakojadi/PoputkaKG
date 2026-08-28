@@ -5,7 +5,6 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
-    Float,
     Integer,
     String,
     Text,
@@ -34,7 +33,6 @@ class Campaign(Base):
     interval_minutes = Column(Integer)
     content_text = Column(String, nullable=True)
     content_photo = Column(String, nullable=True)
-    price_paid = Column(Float, default=0.0)
     is_active = Column(Boolean, default=True)
     job_id = Column(String, nullable=True)
     failure_count = Column(Integer, default=0)
@@ -80,7 +78,6 @@ class Payment(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger)
     qr_transaction_id = Column(String, unique=True, index=True)
-    amount = Column(Float, default=0.0)  # som, what we charged
     status = Column(String, default="WAITING")
     campaign_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

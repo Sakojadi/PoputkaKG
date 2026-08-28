@@ -546,7 +546,6 @@ async def process_payment(callback: CallbackQuery, state: FSMContext):
         payment = Payment(
             user_id=callback.from_user.id,
             qr_transaction_id=qr.qr_transaction_id,
-            amount=price,
             status="WAITING",
         )
         session.add(payment)
@@ -711,7 +710,6 @@ async def process_content_ok(callback: CallbackQuery, state: FSMContext):
             content_text=data.get("content_text"),
             content_photo=data.get("content_photo"),
             is_active=True,
-            price_paid=data.get("price", 0.0),
         )
         session.add(campaign)
         await session.commit()

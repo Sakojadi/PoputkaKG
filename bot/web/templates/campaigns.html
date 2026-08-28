@@ -112,10 +112,6 @@
                 <select name="sort" id="fSort" class="form-control">
                     <option value="new" {% if sort=='new' %}selected{% endif %}>Сначала новые</option>
                     <option value="old" {% if sort=='old' %}selected{% endif %}>Сначала старые</option>
-                    <option value="price_desc" {% if sort=='price_desc' %}selected{% endif %}>Сумма: по убыванию
-                    </option>
-                    <option value="price_asc" {% if sort=='price_asc' %}selected{% endif %}>Сумма: по возрастанию
-                    </option>
                     <option value="left_desc" {% if sort=='left_desc' %}selected{% endif %}>Больше осталось публикаций
                     </option>
                     <option value="total_desc" {% if sort=='total_desc' %}selected{% endif %}>Больше всего куплено
@@ -178,7 +174,6 @@
                     <th>Содержание</th>
                     <th>Публикации</th>
                     <th>Интервал</th>
-                    <th>Сумма</th>
                     <th>Создано</th>
                     <th>Статус</th>
                     <th>Управление</th>
@@ -229,8 +224,6 @@
                         </div>
                     </td>
                     <td class="nowrap" data-label="Интервал">{{ c.interval_minutes }} мин</td>
-                    <td class="nowrap" data-label="Сумма"><strong style="color: var(--accent-emerald-text);">{{
-                            c.price_paid }} сом</strong></td>
                     <td class="nowrap" data-label="Создано" style="color: var(--text-secondary);">
                         {{ c.created_at.strftime('%d.%m.%Y %H:%M') if c.created_at else '—' }}
                     </td>
@@ -291,7 +284,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="9" class="cell-empty">
+                    <td colspan="8" class="cell-empty">
                         <div class="empty-state">
                             <i class="fa-solid fa-inbox"></i>
                             <p>
@@ -378,10 +371,6 @@
                 <strong id="modalUserCampaigns">-</strong>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="color: var(--text-secondary);">Потрачено:</span>
-                <strong id="modalUserSpent" style="color: var(--accent-emerald-text);">-</strong>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
                 <span style="color: var(--text-secondary);">Статус в боте:</span>
                 <span id="modalUserStatus">-</span>
             </div>
@@ -430,14 +419,13 @@
     window.showUserModal = function (userId) {
         const u = userMap[userId] || {
             id: userId, username: "", language: "Неизвестно",
-            campaigns_count: 0, total_spent: 0, is_banned: false
+            campaigns_count: 0, is_banned: false
         };
 
         document.getElementById('modalUserId').innerText = u.id;
         document.getElementById('modalUserUsername').innerText = u.username ? ('@' + u.username) : '';
         document.getElementById('modalUserLang').innerText = u.language;
         document.getElementById('modalUserCampaigns').innerText = u.campaigns_count + ' шт.';
-        document.getElementById('modalUserSpent').innerText = u.total_spent + ' сом';
         document.getElementById('modalUserAds').href = '/admin/campaigns?q=' + encodeURIComponent(u.id);
 
         const statusEl = document.getElementById('modalUserStatus');
