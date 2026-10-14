@@ -456,7 +456,6 @@ async def _advance_to_content(user_id: int, lang: str, payment_id: int) -> None:
                 "state was lost (likely a restart); they are stranded until an "
                 "admin advances them manually."
             )
-            _notify_admins_stranded_payment(payment_id, user_id)
         else:
             logger.warning(
                 f"Payment {payment_id} settled for user {user_id} but they are "
