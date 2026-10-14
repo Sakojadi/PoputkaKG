@@ -8,6 +8,7 @@ per web request leaks memory faster than the GC returns it to the OS.
 from aiogram import Bot
 
 from bot.config import config
+from bot.services.tolerant_session import TolerantSession
 
 _bot: Bot | None = None
 
@@ -15,7 +16,7 @@ _bot: Bot | None = None
 def get_bot() -> Bot:
     global _bot
     if _bot is None:
-        _bot = Bot(token=config.bot_token)
+        _bot = Bot(token=config.bot_token, session=TolerantSession())
     return _bot
 
 

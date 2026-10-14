@@ -78,7 +78,13 @@ async def main():
         # the scheduler and the web admin, so its lifecycle belongs to close_bot()
         # below, not to whichever coroutine happens to finish first.
         await asyncio.gather(
-            dp.start_polling(bot, handle_signals=False, close_bot_session=False),
+            dp.start_polling(
+                bot,
+                handle_signals=False,
+                close_bot_session=False,
+                # Only these two types have handlers; anything else is noise.
+                allowed_updates=["message", "callback_query"],
+            ),
             server.serve(),
         )
     finally:
