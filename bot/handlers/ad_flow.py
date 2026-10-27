@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 from datetime import UTC, datetime
 
@@ -638,12 +639,19 @@ async def process_content(message: Message, state: FSMContext, bot: Bot):
             logger.debug(f"Failed to fetch photo for moderation: {e}")
 
     # Fast multi-stage moderation
-    is_valid, reason = await moderate_full_content(content_text, photo_bytes)
+    is_valid, reason, word, part = await moderate_full_content(content_text, photo_bytes)
     if not is_valid:
         if reason == "links_not_allowed":
-            await message.answer(get_text(lang, "content_links_blocked"))
+            key = "content_links_blocked"
         else:
-            await message.answer(get_text(lang, "content_18_blocked"))
+            key = "content_18_blocked"
+        reply = get_text(lang, key)
+        if reason == "banned_words_detected" and word:
+            hint = "blocked_word_hint" if word.lower() == part.lower() else "blocked_word_inside_hint"
+            reply += "\n\n" + get_text(
+                lang, hint, word=html.escape(word), part=html.escape(part)
+            )
+        await message.answer(reply, parse_mode="HTML")
         return
 
     await state.update_data(content_text=content_text, content_photo=content_photo)

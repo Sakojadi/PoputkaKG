@@ -67,4 +67,51 @@
         </div>
     </div>
 </div>
+
+<!-- Banned words editor -->
+<div class="card" id="banned-words" style="margin-top: 20px;">
+    <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 6px;">
+        <i class="fa-solid fa-ban" style="color: var(--accent-rose-text);"></i> Запрещённые слова
+    </h3>
+    <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
+        Слово ищется <strong>внутри</strong> любого слова (например, «гондон» сработает на «Озгондон»).
+        Чтобы искать только целое слово, начните с <code>\b</code>. Поддерживаются регулярные выражения.
+        Пользователю в сообщении показывается найденное слово.
+    </p>
+
+    <form action="/admin/settings/banned-words/add" method="POST" style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;">
+        <input type="text" name="word" placeholder="Новое слово или шаблон" class="form-control" style="min-height: 44px; flex: 1; min-width: 200px;" required>
+        <button type="submit" class="btn btn-primary" style="min-height: 44px;"><i class="fa-solid fa-plus"></i> Добавить</button>
+    </form>
+
+    <form action="/admin/settings" method="GET" style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px;">
+        <input type="text" name="test_text" value="{{ test_text or '' }}" placeholder="Проверить текст: вставьте объявление" class="form-control" style="min-height: 44px; flex: 1; min-width: 200px;">
+        <button type="submit" class="btn btn-secondary" style="min-height: 44px;"><i class="fa-solid fa-magnifying-glass"></i> Проверить</button>
+    </form>
+    {% if test_result %}
+        {% if test_result.ok %}
+        <div class="alert alert-success" style="margin-bottom: 16px;"><i class="fa-solid fa-circle-check"></i> Текст проходит модерацию</div>
+        {% else %}
+        <div class="alert alert-error" style="margin-bottom: 16px;"><i class="fa-solid fa-circle-exclamation"></i> Заблокировано: <strong>{{ test_result.word or test_result.reason }}</strong>{% if test_result.word and test_result.word|lower != test_result.part|lower %} — содержит <strong>{{ test_result.part }}</strong>{% endif %}</div>
+        {% endif %}
+    {% endif %}
+
+    <div style="display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0;">
+        {% for word in banned_words %}
+        <form action="/admin/settings/banned-words/delete" method="POST" style="margin: 0;">
+            <input type="hidden" name="word" value="{{ word }}">
+            <span class="badge badge-stopped" style="display: inline-flex; align-items: center; gap: 8px; font-size: 13px; padding: 6px 10px;">
+                <code>{{ word }}</code>
+                <button type="submit" title="Удалить" style="background: none; border: none; color: inherit; cursor: pointer; padding: 0;"><i class="fa-solid fa-xmark"></i></button>
+            </span>
+        </form>
+        {% else %}
+        <span style="color: var(--text-secondary); font-size: 13px;">Список пуст — фильтр отключён.</span>
+        {% endfor %}
+    </div>
+
+    <form action="/admin/settings/banned-words/reset" method="POST" onsubmit="return confirm('Сбросить список к значениям по умолчанию? Ваши изменения будут потеряны.');">
+        <button type="submit" class="btn btn-secondary" style="min-height: 44px;"><i class="fa-solid fa-rotate-left"></i> Сбросить к умолчанию</button>
+    </form>
+</div>
 {% endblock %}

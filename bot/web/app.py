@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import re
 import secrets
 import urllib.parse
 from datetime import UTC, datetime, timedelta, timezone
@@ -19,8 +20,8 @@ from bot.config import config
 from bot.database.db import AsyncSessionLocal
 from bot.database.models import Campaign, GroupPost, Payment, User
 from bot.handlers.ad_flow import _spawn, confirm_payment
+from bot.services import moderation
 from bot.services.group_posts import build_group_post_markup
-from bot.services.moderation import BANNED_WORDS
 from bot.services.payments import is_mock
 from bot.services.scheduler import (
     remove_campaign_job,
@@ -974,14 +975,22 @@ async def settings_page(
     request: Request,
     msg: str | None = None,
     err: str | None = None,
+    test_text: str | None = None,
     _=Depends(require_admin),
 ):
+    test_result = None
+    if test_text:
+        ok, reason, word, part = moderation.moderate_text(test_text)
+        test_result = {"ok": ok, "reason": reason, "word": word, "part": part}
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
         context={
             "active_page": "settings",
-            "banned_words_count": len(BANNED_WORDS),
+            "banned_words": moderation.BANNED_WORDS,
+            "banned_words_count": len(moderation.BANNED_WORDS),
+            "test_text": test_text,
+            "test_result": test_result,
             "msg": msg,
             "err": err,
         },
@@ -1007,3 +1016,39 @@ async def settings_general_action(
     return RedirectResponse(
         url="/admin/settings?msg=Настройки+успешно+сохранены!", status_code=302
     )
+
+
+def _words_redirect(msg: str | None = None, err: str | None = None):
+    key, value = ("msg", msg) if msg else ("err", err)
+    return RedirectResponse(
+        url=f"/admin/settings?{key}={urllib.parse.quote(value)}#banned-words", status_code=302
+    )
+
+
+@app.post("/admin/settings/banned-words/add")
+async def banned_words_add(word: str = Form(""), _=Depends(require_admin)):
+    word = word.strip()
+    if not word:
+        return _words_redirect(err="Введите слово или шаблон")
+    try:
+        re.compile(word)
+    except re.error as e:
+        return _words_redirect(err=f"Некорректное регулярное выражение: {e}")
+    if word in moderation.BANNED_WORDS:
+        return _words_redirect(err="Это слово уже в списке")
+    await moderation.save_banned_words([*moderation.BANNED_WORDS, word])
+    return _words_redirect(msg=f"Добавлено: {word}")
+
+
+@app.post("/admin/settings/banned-words/delete")
+async def banned_words_delete(word: str = Form(...), _=Depends(require_admin)):
+    if word not in moderation.BANNED_WORDS:
+        return _words_redirect(err="Слово не найдено")
+    await moderation.save_banned_words([w for w in moderation.BANNED_WORDS if w != word])
+    return _words_redirect(msg=f"Удалено: {word}")
+
+
+@app.post("/admin/settings/banned-words/reset")
+async def banned_words_reset(_=Depends(require_admin)):
+    await moderation.save_banned_words(list(moderation.DEFAULT_BANNED_WORDS))
+    return _words_redirect(msg="Список сброшен к значениям по умолчанию")

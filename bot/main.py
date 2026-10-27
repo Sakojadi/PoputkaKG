@@ -10,6 +10,7 @@ from bot.database.db import init_db
 from bot.handlers import get_handlers_router
 from bot.middlewares import BanMiddleware
 from bot.services.fsm import set_dispatcher
+from bot.services.moderation import reload_banned_words
 from bot.services.scheduler import start_scheduler, sync_jobs_with_db
 from bot.services.settings_store import load_settings
 from bot.services.tg import close_bot, get_bot
@@ -32,6 +33,7 @@ async def main():
     # Initialize DB
     await init_db()
     await load_settings()
+    await reload_banned_words()
 
     # Start Scheduler, then drop any jobs left behind by a previous crash and
     # restore jobs for campaigns that are still active.
