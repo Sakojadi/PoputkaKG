@@ -82,3 +82,21 @@ class Payment(Base):
     campaign_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ModerationEvent(Base):
+    """One group-moderation decision. Doubles as the strike ledger: only rows
+    with enforced=True count towards a user's strikes (log-only rows do not)."""
+
+    __tablename__ = "moderation_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, index=True)
+    chat_id = Column(BigInteger)
+    message_id = Column(BigInteger)
+    kind = Column(String)  # "hard" | "soft"
+    rule = Column(String)
+    action = Column(String)  # "warn" | "mute" | "ban"
+    enforced = Column(Boolean, default=False)
+    snippet = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)

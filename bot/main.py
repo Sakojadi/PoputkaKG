@@ -3,13 +3,13 @@ import logging
 import sys
 
 import uvicorn
-from aiogram import Dispatcher
 
 from bot.config import config
 from bot.database.db import init_db
-from bot.handlers import get_handlers_router
-from bot.middlewares import BanMiddleware
+from bot.dispatcher import build_dispatcher
+from bot.handlers.group_moderation import ensure_group_keyboard_removed
 from bot.services.fsm import set_dispatcher
+from bot.services.group_filter import reload_soft_words
 from bot.services.moderation import reload_banned_words
 from bot.services.scheduler import start_scheduler, sync_jobs_with_db
 from bot.services.settings_store import load_settings
@@ -34,6 +34,7 @@ async def main():
     await init_db()
     await load_settings()
     await reload_banned_words()
+    await reload_soft_words()
 
     # Start Scheduler, then drop any jobs left behind by a previous crash and
     # restore jobs for campaigns that are still active.
@@ -48,18 +49,14 @@ async def main():
     except Exception as e:
         logger.debug(f"Failed to delete commands: {e}")
 
-    dp = Dispatcher()
+    # One-time: remove the stale reply keyboard an old /start left in the group.
+    await ensure_group_keyboard_removed(bot)
+
+    dp = build_dispatcher()
 
     # The xPay webhook runs in the web layer and needs to move a paying
     # user's FSM state, so the dispatcher must be reachable from there.
     set_dispatcher(dp)
-
-    # Register global BanMiddleware
-    ban_middleware = BanMiddleware()
-    dp.message.outer_middleware(ban_middleware)
-    dp.callback_query.outer_middleware(ban_middleware)
-
-    dp.include_router(get_handlers_router())
 
     # Configure Uvicorn Web Server
     uvi_config = uvicorn.Config(
@@ -84,8 +81,9 @@ async def main():
                 bot,
                 handle_signals=False,
                 close_bot_session=False,
-                # Only these two types have handlers; anything else is noise.
-                allowed_updates=["message", "callback_query"],
+                # Only these have handlers; anything else is noise. Edits are
+                # needed so a clean group post can't be edited into spam.
+                allowed_updates=["message", "edited_message", "callback_query"],
             ),
             server.serve(),
         )

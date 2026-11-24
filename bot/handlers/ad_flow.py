@@ -402,24 +402,6 @@ def _notify_paid(user_id: int, lang: str) -> None:
     _spawn(get_bot().send_message(user_id, get_text(lang, "payment_confirmed")))
 
 
-def _notify_admins_stranded_payment(payment_id: int, user_id: int) -> None:
-    """Best-effort heads-up so a paid-but-stranded user isn't purely silent.
-
-    Not a substitute for a proper admin payments view (see docs/NEXT_STEPS.md
-    §3.2) -- just the minimum so the operator finds out at all.
-    """
-    if not config.admin_ids:
-        return
-    text = (
-        f"⚠️ Payment #{payment_id} from user {user_id} was completed but their "
-        "session was lost (likely a bot restart). They are stuck until you "
-        "reach out or they restart the flow with /start."
-    )
-    bot = get_bot()
-    for admin_id in config.admin_ids:
-        _spawn(bot.send_message(admin_id, text))
-
-
 async def _advance_to_content(user_id: int, lang: str, payment_id: int) -> None:
     """Move a paid user to content entry and tell them, exactly once.
 

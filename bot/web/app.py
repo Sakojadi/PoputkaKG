@@ -20,7 +20,7 @@ from bot.config import config
 from bot.database.db import AsyncSessionLocal
 from bot.database.models import Campaign, GroupPost, Payment, User
 from bot.handlers.ad_flow import _spawn, confirm_payment
-from bot.services import moderation
+from bot.services import group_enforcement, group_filter, moderation
 from bot.services.group_posts import build_group_post_markup
 from bot.services.payments import is_mock
 from bot.services.scheduler import (
@@ -1052,3 +1052,81 @@ async def banned_words_delete(word: str = Form(...), _=Depends(require_admin)):
 async def banned_words_reset(_=Depends(require_admin)):
     await moderation.save_banned_words(list(moderation.DEFAULT_BANNED_WORDS))
     return _words_redirect(msg="Список сброшен к значениям по умолчанию")
+
+
+# --- GROUP MODERATION ---
+MODE_HELP = {
+    "off": "Выключено: бот не проверяет сообщения в группе.",
+    "log": "Только журнал: бот ничего не удаляет, а лишь записывает, что сделал бы.",
+    "enforce": "Включено: бот удаляет сообщения, ограничивает и банит нарушителей.",
+}
+
+
+def _moderation_redirect(msg: str | None = None, err: str | None = None):
+    key, value = ("msg", msg) if msg else ("err", err)
+    return RedirectResponse(
+        url=f"/admin/moderation?{key}={urllib.parse.quote(value)}", status_code=302
+    )
+
+
+@app.get("/admin/moderation", response_class=HTMLResponse)
+async def moderation_page(
+    request: Request,
+    msg: str | None = None,
+    err: str | None = None,
+    _=Depends(require_admin),
+):
+    return templates.TemplateResponse(
+        request=request,
+        name="moderation.html",
+        context={
+            "active_page": "settings",
+            "mode": await group_enforcement.get_mode(),
+            "modes": group_enforcement.MODES,
+            "mode_help": MODE_HELP,
+            "soft_words": group_filter.get_soft_words(),
+            "events": await group_enforcement.recent_events(100),
+            "msg": msg,
+            "err": err,
+        },
+    )
+
+
+@app.post("/admin/moderation/mode")
+async def moderation_mode_action(mode: str = Form(...), _=Depends(require_admin)):
+    try:
+        await group_enforcement.set_mode(mode)
+    except ValueError:
+        return _moderation_redirect(err="Неизвестный режим")
+    return _moderation_redirect(msg=f"Режим: {mode}")
+
+
+@app.post("/admin/moderation/words/add")
+async def moderation_words_add(word: str = Form(""), _=Depends(require_admin)):
+    word = word.strip()
+    if not word:
+        return _moderation_redirect(err="Введите слово или шаблон")
+    try:
+        re.compile(word)
+    except re.error as e:
+        return _moderation_redirect(err=f"Некорректное регулярное выражение: {e}")
+    words = group_filter.get_soft_words()
+    if word in words:
+        return _moderation_redirect(err="Это слово уже в списке")
+    await group_filter.save_soft_words([*words, word])
+    return _moderation_redirect(msg=f"Добавлено: {word}")
+
+
+@app.post("/admin/moderation/words/delete")
+async def moderation_words_delete(word: str = Form(...), _=Depends(require_admin)):
+    words = group_filter.get_soft_words()
+    if word not in words:
+        return _moderation_redirect(err="Слово не найдено")
+    await group_filter.save_soft_words([w for w in words if w != word])
+    return _moderation_redirect(msg=f"Удалено: {word}")
+
+
+@app.post("/admin/moderation/words/reset")
+async def moderation_words_reset(_=Depends(require_admin)):
+    await group_filter.save_soft_words(list(group_filter.DEFAULT_SOFT_WORDS))
+    return _moderation_redirect(msg="Список сброшен к значениям по умолчанию")

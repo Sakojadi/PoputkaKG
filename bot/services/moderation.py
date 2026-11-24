@@ -321,21 +321,27 @@ def find_banned_word(text: str) -> tuple[str, str] | None:
 
 
 
+ALLOWED_LINK_PARTS = ["wa.me", "whatsapp.com", "t.me", "telegram.me", "tg://"]
+
+
+def find_disallowed_link(text: str) -> str | None:
+    """The first link in `text` that is not a WhatsApp/Telegram contact, or None."""
+    for url in URL_PATTERN.findall(text or ""):
+        u_lower = url.lower()
+        if not any(allowed in u_lower for allowed in ALLOWED_LINK_PARTS):
+            return url
+    return None
+
+
 def moderate_text(text: str) -> tuple[bool, str, str, str]:
     """Returns (ok, reason, word, part): `word` is the offending word as typed,
     `part` the banned fragment inside it (both empty when unknown)."""
     if not text:
         return True, "", "", ""
 
-    urls = URL_PATTERN.findall(text)
-    if urls:
-        for url in urls:
-            u_lower = url.lower()
-            if not any(
-                allowed in u_lower
-                for allowed in ["wa.me", "whatsapp.com", "t.me", "telegram.me", "tg://"]
-            ):
-                return False, "links_not_allowed", url, url
+    url = find_disallowed_link(text)
+    if url is not None:
+        return False, "links_not_allowed", url, url
 
     found = find_banned_word(text)
     if found is not None:

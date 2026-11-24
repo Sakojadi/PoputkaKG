@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+
+{% block title %}Модерация группы | Poputka Bot{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-title">
+        <h2>Модерация группы</h2>
+        <p>Проверка сообщений в группе, предупреждения, мут на 24 часа и бан</p>
+    </div>
+</div>
+
+{% if msg %}
+<div class="alert alert-success">
+    <i class="fa-solid fa-circle-check"></i> {{ msg }}
+</div>
+{% endif %}
+
+{% if err %}
+<div class="alert alert-error">
+    <i class="fa-solid fa-circle-exclamation"></i> {{ err }}
+</div>
+{% endif %}
+
+<div class="card">
+    <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 6px;">
+        <i class="fa-solid fa-toggle-on" style="color: var(--accent-primary);"></i> Режим
+    </h3>
+    <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
+        Начните с «log»: несколько дней смотрите журнал ниже и только потом включайте «enforce».
+        Спам: 1-й раз — мут на 24 ч, 2-й раз — бан. Нарушение правил: предупреждение, затем мут, затем бан
+        (в пределах 24 часов). Админы группы не проверяются.
+    </p>
+    <form action="/admin/moderation/mode" method="POST" style="display: flex; flex-direction: column; gap: 10px;">
+        {% for m in modes %}
+        <label style="display: flex; gap: 10px; align-items: flex-start; font-size: 14px;">
+            <input type="radio" name="mode" value="{{ m }}" {% if m == mode %}checked{% endif %} style="margin-top: 4px;">
+            <span><strong>{{ m }}</strong> — {{ mode_help[m] }}</span>
+        </label>
+        {% endfor %}
+        <button type="submit" class="btn btn-primary" style="min-height: 44px; align-self: flex-start;">
+            <i class="fa-solid fa-floppy-disk"></i> Сохранить режим
+        </button>
+    </form>
+</div>
+
+<div class="card" style="margin-top: 20px;">
+    <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 6px;">
+        <i class="fa-solid fa-ban" style="color: var(--accent-rose-text);"></i> Слова-нарушители для группы
+    </h3>
+    <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
+        Отдельный список от рекламного: за эти слова сообщение удаляется с предупреждением.
+        Правила для порно-спама встроены и здесь не редактируются. Чтобы искать только целое слово,
+        начните с <code>\b</code>. Поддерживаются регулярные выражения.
+    </p>
+
+    <form action="/admin/moderation/words/add" method="POST" style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px;">
+        <input type="text" name="word" placeholder="Новое слово или шаблон" class="form-control" style="min-height: 44px; flex: 1; min-width: 200px;" required>
+        <button type="submit" class="btn btn-primary" style="min-height: 44px;"><i class="fa-solid fa-plus"></i> Добавить</button>
+    </form>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px;">
+        {% for word in soft_words %}
+        <form action="/admin/moderation/words/delete" method="POST" style="margin: 0;">
+            <input type="hidden" name="word" value="{{ word }}">
+            <span class="badge badge-stopped" style="display: inline-flex; align-items: center; gap: 8px; font-size: 13px; padding: 6px 10px;">
+                <code>{{ word }}</code>
+                <button type="submit" title="Удалить" style="background: none; border: none; color: inherit; cursor: pointer; padding: 0;"><i class="fa-solid fa-xmark"></i></button>
+            </span>
+        </form>
+        {% else %}
+        <span style="color: var(--text-secondary); font-size: 13px;">Список пуст — слова не проверяются.</span>
+        {% endfor %}
+    </div>
+
+    <form action="/admin/moderation/words/reset" method="POST" onsubmit="return confirm('Сбросить список к значениям по умолчанию? Ваши изменения будут потеряны.');">
+        <button type="submit" class="btn btn-secondary" style="min-height: 44px;"><i class="fa-solid fa-rotate-left"></i> Сбросить к умолчанию</button>
+    </form>
+</div>
+
+<div class="table-card" style="margin-top: 20px;">
+    <h3 style="font-size: 16px; font-weight: 700; padding: 16px 20px 0;">
+        <i class="fa-solid fa-clock-rotate-left"></i> Последние 100 событий
+    </h3>
+    {% if events %}
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Время</th>
+                <th>Telegram ID</th>
+                <th>Тип</th>
+                <th>Правило</th>
+                <th>Действие</th>
+                <th>Текст</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for e in events %}
+            <tr>
+                <td>{{ e.created_at|localdt }}</td>
+                <td>{{ e.user_id }}</td>
+                <td>{{ e.kind }}</td>
+                <td>{{ e.rule }}</td>
+                <td>
+                    {{ e.action }}
+                    {% if e.enforced %}<span class="badge badge-active">выполнено</span>{% else %}<span class="badge badge-completed">только журнал</span>{% endif %}
+                </td>
+                <td>{{ e.snippet }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state" style="padding: 30px;">
+        <i class="fa-solid fa-shield-halved"></i>
+        <p>Пока нет событий.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

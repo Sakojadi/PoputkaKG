@@ -51,3 +51,29 @@ uuid is resolved from the login response by mode.
 
 Manual sandbox probe: `uv run python -m scripts.xpay_smoke`.
 Test payments are settled at https://sandbox.xpay.kg.
+
+## Group moderation
+
+The bot only talks to people in **private chats**. In the group (`GROUP_ID`) it
+never replies; it only moderates. It needs the **Delete messages** and
+**Ban users** admin rights there.
+
+Manage it at `/admin/moderation` in the web panel:
+
+| Mode | What happens |
+| :--- | :--- |
+| `off` | No checks. |
+| `log` (default) | Nothing is deleted. Each flagged message is recorded in the events table with the action the bot *would* take. Review this for a few days first. |
+| `enforce` | The message is deleted and the ladder below is applied. |
+
+Ladder (only `enforce` actions count as strikes; group admins are never checked):
+
+| Violation | 1st | 2nd | 3rd |
+| :--- | :--- | :--- | :--- |
+| **Spam** (porn/18+ phrases, forwarded message with link buttons) | mute 24 h | ban | |
+| **Rule violation** (profanity, drugs, gambling, outside links — editable word list) | warning | mute 24 h (within 24 h) | ban (within 24 h) |
+
+Edited messages are checked too. Photos are not scanned (text, captions and
+button labels only).
+
+`ADMIN_IDS` is no longer used; remove it from your environment.

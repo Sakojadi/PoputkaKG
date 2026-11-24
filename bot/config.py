@@ -23,7 +23,6 @@ class Settings(BaseSettings):
     public_base_url: str = ""
     openai_api_key: str = ""
     database_url: str = "sqlite+aiosqlite:///bot.db"
-    admin_ids: list[int] = []
 
     # Web Admin Dashboard Settings
     # No defaults: a hardcoded secret/password committed to the repo would let
@@ -33,16 +32,6 @@ class Settings(BaseSettings):
     admin_password: str
     secret_key: str
     port: int = 8000
-
-    @field_validator("admin_ids", mode="before")
-    @classmethod
-    def parse_admin_ids(cls, v):
-        if isinstance(v, str):
-            v = v.strip("[]'\" ")
-            return [int(x.strip()) for x in v.split(",") if x.strip()]
-        if isinstance(v, int):
-            return [v]
-        return v
 
     @field_validator("group_id", mode="before")
     @classmethod

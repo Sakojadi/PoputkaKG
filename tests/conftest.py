@@ -22,12 +22,60 @@ from bot.database.db import Base, engine
 @pytest.fixture
 async def db():
     """A clean schema per test, on a throwaway sqlite file."""
+    from bot.services import settings_store
+
+    # The settings cache is process-wide; dropping the tables must not leave
+    # stale values (e.g. a group_filter_mode) behind for the next test.
+    settings_store._cache.clear()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield
+    settings_store._cache.clear()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+
+
+@pytest.fixture(scope="session")
+def dispatcher():
+    """The real dispatcher. Routers are module-level singletons, so it can only
+    be built once per process."""
+    from bot.dispatcher import build_dispatcher
+
+    return build_dispatcher()
+
+
+@pytest.fixture
+async def tg(db, dispatcher):
+    """Feed updates to the real handlers with a fake Bot API behind them."""
+    from types import SimpleNamespace
+
+    from tests.tg_fakes import make_bot
+
+    bot, session = make_bot()
+
+    async def feed(update):
+        await dispatcher.feed_update(bot, update)
+
+    yield SimpleNamespace(bot=bot, session=session, feed=feed)
+    dispatcher.storage.storage.clear()  # don't leak FSM state between tests
+
+
+@pytest.fixture
+def group_chat():
+    """Point GROUP_ID at the fake group.
+
+    Patches the `config` object the handler module holds, not
+    `bot.config.config`: tests/test_config.py reloads bot.config, after which
+    the two are different objects.
+    """
+    from bot.handlers.group_moderation import config
+    from tests.tg_fakes import GROUP_ID
+
+    previous = config.group_id
+    config.group_id = GROUP_ID
+    yield GROUP_ID
+    config.group_id = previous
 
 
 @pytest.fixture

@@ -15,6 +15,13 @@ class BanMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
+        # Bans and user rows are about the private chat with the bot. In the
+        # group this middleware would answer "account blocked" to banned users
+        # and insert a row for every member who ever posted.
+        chat = data.get("event_chat")
+        if chat is not None and chat.type != "private":
+            return await handler(event, data)
+
         user = data.get("event_from_user")
         if user:
             async with AsyncSessionLocal() as session:
